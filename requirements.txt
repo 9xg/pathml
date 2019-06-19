@@ -1,0 +1,4 @@
+numpy
+pyvips
+scikit-image
+scipy
