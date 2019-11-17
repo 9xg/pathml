@@ -6,6 +6,7 @@ from skimage.filters import threshold_triangle
 from skimage.morphology import binary_dilation, remove_small_objects
 from scipy.ndimage.morphology import binary_fill_holes
 from skimage.color import rgb2gray, rgb2lab
+from tqdm import tqdm
 
 
 ##
@@ -85,14 +86,17 @@ class Slide:
         # TODO: Implement padding of boundary tiles
         # TODO: Tile overlap not supported yey
         self.padEdgeTiles = padEdgeTiles
-        self.tileOverlap = 0
+        self.tileOverlap = round(tileOverlap * tileSize)
         self.tileSize = tileSize
         self.tileMetadata = {}
         # Create tile adresses and coordinates
         self.numTilesInX = self.slide.width // (
             self.tileSize - self.tileOverlap)
+        if self.numTilesInX * self.tileSize > self.slide.width: self.numTilesInX -= 1
         self.numTilesInY = self.slide.height // (
             self.tileSize - self.tileOverlap)
+        if self.numTilesInY * self.tileSize > self.slide.height: self.numTilesInY -= 1
+
         for y in range(self.numTilesInY):
             for x in range(self.numTilesInX):
                 self.tileMetadata[(x, y)] = {'x': x * (self.tileSize - self.tileOverlap),
@@ -115,15 +119,28 @@ class Slide:
                                       shape=[self.lowMagSlide.height, self.lowMagSlide.width, self.lowMagSlide.bands])
         self.lowMagSlide = rgb2lab(self.lowMagSlide[:, :, 0:3])[:, :, 0]
 
+        print('Original shape', self.slide.width, self.slide.height)
+        print('Original shape after tiling', self.numTilesInX, self.slide.height)
+        print('Shape after load', self.lowMagSlide.shape)
+
+
         downsampleFactor = round(
             float(self.slideProperties['openslide.level[' + str(level) + '].downsample']))
-        localTileSize = round(self.tileSize / downsampleFactor)
+
+        localTileSize = round((self.tileSize - self.tileOverlap) / downsampleFactor)
         # localTileOverlap = round(self.tileOverlap / downsampleFactor)
+        print('Local tile size', localTileSize)
+        print('Dim in X', (self.slide.height // (self.tileSize - self.tileOverlap) * localTileSize))
         self.lowMagSlide = self.lowMagSlide[0:(self.slide.height // (self.tileSize - self.tileOverlap) * localTileSize),
                                             0:(self.slide.width // (self.tileSize - self.tileOverlap) * localTileSize)]
         self.lowMagSlide = downscale_local_mean(
             rgb2gray(self.lowMagSlide), (localTileSize, localTileSize), cval=1)
 
+        self.lowMagSlide = self.lowMagSlide < 92
+        print(np.count_nonzero(self.lowMagSlide), np.count_nonzero(~self.lowMagSlide), np.count_nonzero(self.lowMagSlide) + np.count_nonzero(~self.lowMagSlide))
+        print(self.numTilesInX, self.numTilesInY)
+
+        return True
         # TODO: This has to be cleaned!!!
         binarizationTh = threshold_triangle(self.lowMagSlide)
         binarizationTh = foregroundThreshold if foregroundThreshold else binarizationTh
@@ -199,11 +216,11 @@ class Slide:
         return self.lowMagSlide
 
 # TODO: a check tileaddress function
-    def iterateTiles(self, excludeBackground=True, includeImage=False):
+    def iterateTiles(self, excludeBackground=True, includeImage=False, writeToNumpy=False):
         for key, value in self.tileMetadata.items():
             # if value['foreground']==True: Inplement exclude background
             if includeImage:
-                yield key, self.getTile(key)
+                yield key, self.getTile(key,writeToNumpy=writeToNumpy)
             else:
                 yield key
 
@@ -216,7 +233,7 @@ class Slide:
             pass
         pass
 
-    def getTileCount(self):
+    def getTileCount(self, foregroundOnly=False):
         if not hasattr(self, 'tileMetadata'):
             raise PermissionError(
                 'setTileProperties must be called before tile counting')
