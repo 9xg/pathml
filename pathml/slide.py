@@ -2,7 +2,7 @@ import numpy as np
 import pyvips as pv
 # import multiprocessing as mp
 from skimage.transform import downscale_local_mean
-from skimage.filters import threshold_triangle
+from skimage.filters import threshold_triangle, threshold_otsu
 from skimage.morphology import binary_dilation, remove_small_objects
 from scipy.ndimage.morphology import binary_fill_holes
 from skimage.color import rgb2gray, rgb2lab
@@ -84,7 +84,6 @@ class Slide:
     def setTileProperties(self, tileSize, tileOverlap=0, padEdgeTiles=False, unit='px'):
         # TODO: Implement units for tile size selection
         # TODO: Implement padding of boundary tiles
-        # TODO: Tile overlap not supported yey
         self.padEdgeTiles = padEdgeTiles
         self.tileOverlap = round(tileOverlap * tileSize)
         self.tileSize = tileSize
@@ -106,7 +105,7 @@ class Slide:
     def foregroundMask():
         pass
 
-    def detectForeground(self, foregroundThreshold=False, hardSegmentation=False, level=2):
+    def detectForeground(self, threshold=False, level=2):
         if not hasattr(self, 'tileMetadata'):
             raise PermissionError(
                 'setTileProperties must be called before foreground detection')
@@ -117,59 +116,27 @@ class Slide:
         self.lowMagSlide = np.ndarray(buffer=self.lowMagSlide.write_to_memory(),
                                       dtype=self.__format_to_dtype[self.lowMagSlide.format],
                                       shape=[self.lowMagSlide.height, self.lowMagSlide.width, self.lowMagSlide.bands])
+        self.lowMagSlideRGB = self.lowMagSlide
         self.lowMagSlide = rgb2lab(self.lowMagSlide[:, :, 0:3])[:, :, 0]
 
-        print('Original shape', self.slide.width, self.slide.height)
-        print('Original shape after tiling', self.numTilesInX, self.slide.height)
-        print('Shape after load', self.lowMagSlide.shape)
+        downsampleFactor = self.slide.width / self.lowMagSlide.shape[1]
 
-
-        downsampleFactor = round(
-            float(self.slideProperties['openslide.level[' + str(level) + '].downsample']))
-
-        localTileSize = round((self.tileSize - self.tileOverlap) / downsampleFactor)
-        # localTileOverlap = round(self.tileOverlap / downsampleFactor)
-        print('Local tile size', localTileSize)
-        print('Dim in X', (self.slide.height // (self.tileSize - self.tileOverlap) * localTileSize))
-        self.lowMagSlide = self.lowMagSlide[0:(self.slide.height // (self.tileSize - self.tileOverlap) * localTileSize),
-                                            0:(self.slide.width // (self.tileSize - self.tileOverlap) * localTileSize)]
-        self.lowMagSlide = downscale_local_mean(
-            rgb2gray(self.lowMagSlide), (localTileSize, localTileSize), cval=1)
-
-        self.lowMagSlide = self.lowMagSlide < 92
-        print(np.count_nonzero(self.lowMagSlide), np.count_nonzero(~self.lowMagSlide), np.count_nonzero(self.lowMagSlide) + np.count_nonzero(~self.lowMagSlide))
-        print(self.numTilesInX, self.numTilesInY)
-
-        return True
-        # TODO: This has to be cleaned!!!
-        binarizationTh = threshold_triangle(self.lowMagSlide)
-        binarizationTh = foregroundThreshold if foregroundThreshold else binarizationTh
-        lowMagSlideBin = self.lowMagSlide < binarizationTh
-
-        minBinSize = 8 if hardSegmentation else 2
-        lowMagSlideBin = binary_fill_holes(
-            remove_small_objects(lowMagSlideBin, minBinSize))
-        lowMagSlideBin = binary_dilation(
-            lowMagSlideBin) if hardSegmentation else lowMagSlideBin
-
-        self.lowMagSlideBin = lowMagSlideBin
-
-        tmpForegroundCount = 0
-        for key, value in self.tileMetadata.items():
-            lookupTile = lowMagSlideBin[int(key[1]), int(key[0])]
-            self.tileMetadata[key].update({'foreground': lookupTile})
-            if lookupTile:
-                tmpForegroundCount = tmpForegroundCount + 1
-
-        self.foregroundTileCount = tmpForegroundCount
-        # INTEGRITY CHECK
-        # integrityCheck = np.ones(lowMagSlideBin.shape, dtype=bool)
-        # for key, value in self.tileMetadata.items():
-        #    integrityCheck[int(key[1]),int(key[0])] = value['foreground']
-        # print(np.array_equal(lowMagSlideBin, integrityCheck))
+        self.foregroundTileAddresses = []
+        for tileAddress in self.iterateTiles():
+            tileXPos = round(self.tileMetadata[tileAddress]['x'] * (1 / downsampleFactor))
+            tileYPos = round(self.tileMetadata[tileAddress]['y'] * (1 / downsampleFactor))
+            tileWidth = round(self.tileMetadata[tileAddress]['width'] * (1 / downsampleFactor))
+            tileHeight = round(self.tileMetadata[tileAddress]['height'] * (1 / downsampleFactor))
+            localTmpTile = self.lowMagSlide[tileYPos:tileYPos + tileHeight, tileXPos:tileXPos + tileWidth]
+            localTmpTileMean = np.nanmean(localTmpTile)
+            if localTmpTileMean < threshold:
+                self.tileMetadata[tileAddress].update({'foreground': True})
+                self.foregroundTileAddresses.append(tileAddress)
+            else:
+                self.tileMetadata[tileAddress].update({'foreground': False})
         return True
 
-    def getTile(self, tileAddress, writeToNumpy=False, doBaselineDictionary=False):
+    def getTile(self, tileAddress, writeToNumpy=False):
         if not hasattr(self, 'tileMetadata'):
             raise PermissionError(
                 'setTileProperties must be called before accessing tiles')
@@ -186,10 +153,13 @@ class Slide:
                 raise ValueError(
                     'Tile address (' + str(tileAddress[0]) + ', ' + str(tileAddress[1]) + ') is out of bounds')
 
-    def ind2sub(self, tileIndex):
-        return np.unravel_index(tileIndex, (self.numTilesInX, self.numTilesInY), order='F')
+    def ind2sub(self, tileIndex, foregroundOnly=False):
+        if foregroundOnly:
+            return self.foregroundTileAddresses[tileIndex]
+        else:
+            return np.unravel_index(tileIndex, (self.numTilesInX, self.numTilesInY), order='F')
 
-    def saveTile(self, tileAddress, fileName):
+    def saveTile(self, tileAddress, fileName, folder):
         if not hasattr(self, 'tileMetadata'):
             raise PermissionError(
                 'setTileProperties must be called before accessing tiles')
@@ -197,7 +167,8 @@ class Slide:
             if self.numTilesInX >= tileAddress[0] and self.numTilesInY >= tileAddress[1]:
                 tmpTile = self.slide.extract_area(self.tileMetadata[tileAddress]['x'], self.tileMetadata[tileAddress]
                                                   ['y'], self.tileMetadata[tileAddress]['width'], self.tileMetadata[tileAddress]['height'])
-                tmpTile.write_to_file(fileName)
+
+                tmpTile.write_to_file(folder + fileName)
                 # return np.ndarray(buffer=tmpTile.write_to_memory(), dtype=self.__format_to_dtype[tmpTile.format], shape=[tmpTile.height, tmpTile.width, tmpTile.bands])
             else:
                 raise ValueError(
@@ -216,7 +187,7 @@ class Slide:
         return self.lowMagSlide
 
 # TODO: a check tileaddress function
-    def iterateTiles(self, excludeBackground=True, includeImage=False, writeToNumpy=False):
+    def iterateTiles(self, includeImage=False, writeToNumpy=False):
         for key, value in self.tileMetadata.items():
             # if value['foreground']==True: Inplement exclude background
             if includeImage:
@@ -237,4 +208,7 @@ class Slide:
         if not hasattr(self, 'tileMetadata'):
             raise PermissionError(
                 'setTileProperties must be called before tile counting')
-        return len(self.tileMetadata)
+        if foregroundOnly:
+            return len(self.foregroundTileAddresses)
+        else:
+            return len(self.tileMetadata)
