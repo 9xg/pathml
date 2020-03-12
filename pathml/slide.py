@@ -72,11 +72,6 @@ class Slide:
             if self.__verbose:
                 print(
                     self.__verbosePrefix + str(len(self.slideProperties)) + " properties were successfully imported")
-            if self.__verbose:
-                print(
-                    self.__verbosePrefix + "This slide was digitized on a scanner by " + self.slideProperties[
-                        'openslide.vendor'].capitalize() + " at an objective power of " + self.slideProperties[
-                        'openslide.objective-power'])
 
     def integrityCheck(self):
         pass
@@ -102,8 +97,13 @@ class Slide:
                                              'y': y * (self.tileSize - self.tileOverlap), 'width': self.tileSize,
                                              'height': self.tileSize}
 
-    def foregroundMask():
-        pass
+    def foregroundMask(self):
+        foregroundBinaryMask = np.zeros([self.numTilesInY, self.numTilesInX])
+        for address in self.iterateTiles():
+            #print(address)
+            #print(self.tileMetadata[address]['foreground'])
+            foregroundBinaryMask[address[1], address[0]] = int(self.tileMetadata[address]['foreground'] == True)
+        return foregroundBinaryMask
 
     def detectForeground(self, threshold=False, level=2):
         if not hasattr(self, 'tileMetadata'):
@@ -118,7 +118,6 @@ class Slide:
                                       shape=[self.lowMagSlide.height, self.lowMagSlide.width, self.lowMagSlide.bands])
         self.lowMagSlideRGB = self.lowMagSlide
         self.lowMagSlide = rgb2lab(self.lowMagSlide[:, :, 0:3])[:, :, 0]
-
         downsampleFactor = self.slide.width / self.lowMagSlide.shape[1]
 
         self.foregroundTileAddresses = []
