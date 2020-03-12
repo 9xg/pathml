@@ -1,5 +1,5 @@
 import sys
-sys.path.append("/home/gehrun01/Desktop")
+sys.path.append("/home/gehrun01/Desktop/pathml")
 from multiprocessing import Pool
 
 from pathml import slide
@@ -18,7 +18,7 @@ height = 512
 demoSlidePath = '/media/gehrun01/work-io/cruk-phd-data/cytosponge/slides/BEST2/BEST2_CAM_0012/BEST2_CAM_0012_TFF3_1.svs'
 
 demoImage = slide.Slide(demoSlidePath,verbose=True)
-demoImage.setTileProperties(tileSize=100)
+demoImage.setTileProperties(tileSize=400)
 #demoImage.detectForeground()
 #print(demoImage.getTileCount())
 #print(demoImage.tileMetadata.keys())
@@ -26,10 +26,16 @@ demoImage.setTileProperties(tileSize=100)
 for tile in tqdm(demoImage.iterateTiles()):
     pass
 
+def runtester(address):
+    np.mean(demoImage.getTile(address,writeToNumpy=True))
+    #print(address)
+    return address[0]**address[1]
 
 numbers = demoImage.tileMetadata.keys()
-pool = Pool(processes=8)
-print(pool.map(demoImage.getTile, numbers))
+pool = Pool(processes=16)
+
+for _ in tqdm(pool.imap_unordered(runtester, numbers), total=len(numbers)):
+    pass
 
 #print(demoImage.tileMetadata[(0,2)])
 
