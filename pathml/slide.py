@@ -105,7 +105,7 @@ class Slide:
             foregroundBinaryMask[address[1], address[0]] = int(self.tileMetadata[address]['foreground'] == True)
         return foregroundBinaryMask
 
-    def detectForeground(self, threshold=False, level=2):
+    def detectForeground(self, threshold, level=2):
         if not hasattr(self, 'tileMetadata'):
             raise PermissionError(
                 'setTileProperties must be called before foreground detection')
@@ -120,6 +120,16 @@ class Slide:
         self.lowMagSlide = rgb2lab(self.lowMagSlide[:, :, 0:3])[:, :, 0]
         downsampleFactor = self.slide.width / self.lowMagSlide.shape[1]
 
+        if threshold is 'otsu':
+            thresholdLevel = threshold_otsu(self.lowMagSlide)
+        elif threshold is 'triangle':
+            thresholdLevel = threshold_triangle(self.lowMagSlide)
+        elif isinstance(threshold, int) or isinstance(threshold, float):
+            thresholdLevel = threshold
+        else:
+            raise ValueError('No threshold specified for foreground segmentation')
+
+
         self.foregroundTileAddresses = []
         for tileAddress in self.iterateTiles():
             tileXPos = round(self.tileMetadata[tileAddress]['x'] * (1 / downsampleFactor))
@@ -128,7 +138,7 @@ class Slide:
             tileHeight = round(self.tileMetadata[tileAddress]['height'] * (1 / downsampleFactor))
             localTmpTile = self.lowMagSlide[tileYPos:tileYPos + tileHeight, tileXPos:tileXPos + tileWidth]
             localTmpTileMean = np.nanmean(localTmpTile)
-            if localTmpTileMean < threshold:
+            if localTmpTileMean < thresholdLevel:
                 self.tileMetadata[tileAddress].update({'foreground': True})
                 self.foregroundTileAddresses.append(tileAddress)
             else:
