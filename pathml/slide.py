@@ -121,14 +121,13 @@ class Slide:
         downsampleFactor = self.slide.width / self.lowMagSlide.shape[1]
 
         if threshold is 'otsu':
-            thresholdLevel = threshold_otsu(self.lowMagSlide)
+            thresholdLevel = threshold_otsu(self.lowMagSlide[self.lowMagSlide<100])
         elif threshold is 'triangle':
-            thresholdLevel = threshold_triangle(self.lowMagSlide)
+            thresholdLevel = threshold_triangle(self.lowMagSlide[self.lowMagSlide<100])
         elif isinstance(threshold, int) or isinstance(threshold, float):
             thresholdLevel = threshold
         else:
             raise ValueError('No threshold specified for foreground segmentation')
-
 
         self.foregroundTileAddresses = []
         for tileAddress in self.iterateTiles():
