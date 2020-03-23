@@ -1,6 +1,6 @@
 import numpy as np
 import pyvips as pv
-# import multiprocessing as mp
+from joblib import Parallel, delayed
 from skimage.transform import downscale_local_mean
 from skimage.filters import threshold_triangle, threshold_otsu
 from skimage.morphology import binary_dilation, remove_small_objects
@@ -12,7 +12,10 @@ from tqdm import tqdm
 ##
 # TODO: Slide annotations
 ##
-
+# EXPERIMENTAL
+def unwrap_self(arg, **kwarg):
+    return Slide.square_int(*arg, **kwarg)
+# EXPERIMENTAL END
 class Slide:
     __format_to_dtype = {
         'uchar': np.uint8,
@@ -73,13 +76,19 @@ class Slide:
                 print(
                     self.__verbosePrefix + str(len(self.slideProperties)) + " properties were successfully imported")
 
-    def integrityCheck(self):
-        pass
+# EXPERIMENTAL
+    def square_int(self, i):
+        return self.getTile((0,0),writeToNumpy=True)
 
-    def setTileProperties(self, tileSize, tileOverlap=0, padEdgeTiles=False, unit='px'):
+    def run(self, num):
+        results = []
+        results = Parallel(n_jobs= -1, backend="threading")\
+            (delayed(unwrap_self)(i) for i in tqdm(zip([self]*len(num), num), total = len(num)))
+        print(results)
+# EXPERIMENTAL END
+    def setTileProperties(self, tileSize, tileOverlap=0, unit='px'):
         # TODO: Implement units for tile size selection
         # TODO: Implement padding of boundary tiles
-        self.padEdgeTiles = padEdgeTiles
         self.tileOverlap = round(tileOverlap * tileSize)
         self.tileSize = tileSize
         self.tileMetadata = {}
@@ -100,9 +109,13 @@ class Slide:
     def foregroundMask(self):
         foregroundBinaryMask = np.zeros([self.numTilesInY, self.numTilesInX])
         for address in self.iterateTiles():
-            #print(address)
-            #print(self.tileMetadata[address]['foreground'])
-            foregroundBinaryMask[address[1], address[0]] = int(self.tileMetadata[address]['foreground'] == True)
+            foregroundBinaryMask[address[1], address[0]] = int(self.tileMetadata[address]['foreground'] is True)
+        return foregroundBinaryMask
+
+    def generateMask(self, foregroundSelector):
+        foregroundBinaryMask = np.zeros([self.numTilesInY, self.numTilesInX])
+        for address in self.iterateTiles():
+            foregroundBinaryMask[address[1], address[0]] = int(self.tileMetadata[address]['foreground'] is True)
         return foregroundBinaryMask
 
     def detectForeground(self, threshold, level=2):
@@ -121,9 +134,9 @@ class Slide:
         downsampleFactor = self.slide.width / self.lowMagSlide.shape[1]
 
         if threshold is 'otsu':
-            thresholdLevel = threshold_otsu(self.lowMagSlide[self.lowMagSlide<100])
+            thresholdLevel = threshold_otsu(self.lowMagSlide[self.lowMagSlide < 100])  # Ignores all blank areas introduced by certain scanners
         elif threshold is 'triangle':
-            thresholdLevel = threshold_triangle(self.lowMagSlide[self.lowMagSlide<100])
+            thresholdLevel = threshold_triangle(self.lowMagSlide[self.lowMagSlide < 100])  # Ignores all blank areas introduced by certain scanners
         elif isinstance(threshold, int) or isinstance(threshold, float):
             thresholdLevel = threshold
         else:
@@ -185,9 +198,9 @@ class Slide:
     def appendTag(self, tileAddress, key, val):
         self.tileMetadata[tileAddress][key] = val
 
-    def thumbnail(self):
+    def thumbnail(self, level):
         self.lowMagSlide = pv.Image.new_from_file(
-            self.__slideFilePath, level=2)
+            self.__slideFilePath, level=level)
         # smallerImage = self.slide.resize(0.002)
         self.lowMagSlide = np.ndarray(buffer=self.lowMagSlide.write_to_memory(),
                                       dtype=self.__format_to_dtype[self.lowMagSlide.format],
@@ -202,15 +215,6 @@ class Slide:
                 yield key, self.getTile(key,writeToNumpy=writeToNumpy)
             else:
                 yield key
-
-    def segmentForegroundTiles(self, segmentationData=False):
-        if type(segmentationData).__name__ == "SlideAnnotation":
-            pass
-        elif 1 == 2:
-            pass
-        else:
-            pass
-        pass
 
     def getTileCount(self, foregroundOnly=False):
         if not hasattr(self, 'tileMetadata'):
