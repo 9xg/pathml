@@ -5,14 +5,15 @@ from skimage.transform import rescale, resize, downscale_local_mean
 sys.path.append('/home/gehrun01/Desktop/pathml')
 from pathml import slide
 
-pathmlSlide = slide.Slide('/home/gehrun01/Desktop/normal_081.tif')
+pathmlSlide = slide.Slide('/home/gehrun01/Desktop/test.tif')
 pathmlSlide.setTileProperties(tileSize=224)
+pathmlSlide.run(num = range(10000))
+
+quit()
+
 #print(pathmlSlide.slideProperties)
 #pathmlSlide.detectForeground(threshold=95)
-pathmlSlide.detectForeground(threshold=92.5, level=5)
-
-
-
+pathmlSlide.detectForeground(threshold='triangle', level=5)
 
 for tileAddress in pathmlSlide.iterateTiles():
     if pathmlSlide.tileMetadata[tileAddress]['foreground']:

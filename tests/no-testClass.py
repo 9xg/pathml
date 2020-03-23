@@ -15,7 +15,7 @@ width = 512
 height = 512
 
 
-demoSlidePath = '/media/gehrun01/work-io/cruk-phd-data/cytosponge/slides/BEST2/BEST2_CAM_0012/BEST2_CAM_0012_TFF3_1.svs'
+demoSlidePath = '/home/gehrun01/Desktop/normal_081.tif'
 
 demoImage = slide.Slide(demoSlidePath,verbose=True)
 demoImage.setTileProperties(tileSize=400)
