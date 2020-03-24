@@ -6,15 +6,15 @@ import warnings
 from PIL import Image
 import imageio
 import glob
-from tqdm import tqdm
+#from tqdm import tqdm
 import matplotlib.pyplot as plt
 import pickle
 import os
 import argparse
-sys.path.append('/home/gehrun01/Desktop/pathml')
+sys.path.append('/Users/gehrun01/Desktop/pathml')
 from pathml import slide
 
-pathSlide = slide.Slide("/media/gehrun01/archive-storage/BEST2/BEST2_CAM_0131/BEST2_CAM_0131_HE_1.svs",level=0)
+pathSlide = slide.Slide("/Users/gehrun01/Desktop/BEST2_CAM_0654_HE_1.svs",level=0)
 print(pathSlide.slideProperties)
 quit()
 pathSlide.setTileProperties(tileSize=400)

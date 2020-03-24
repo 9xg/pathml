@@ -150,6 +150,7 @@ class Slide:
             tileHeight = round(self.tileMetadata[tileAddress]['height'] * (1 / downsampleFactor))
             localTmpTile = self.lowMagSlide[tileYPos:tileYPos + tileHeight, tileXPos:tileXPos + tileWidth]
             localTmpTileMean = np.nanmean(localTmpTile)
+            self.tileMetadata[tileAddress].update({'foregroundLevel': localTmpTileMean})
             if localTmpTileMean < thresholdLevel:
                 self.tileMetadata[tileAddress].update({'foreground': True})
                 self.foregroundTileAddresses.append(tileAddress)
