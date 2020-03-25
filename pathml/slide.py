@@ -7,6 +7,7 @@ from skimage.morphology import binary_dilation, remove_small_objects
 from scipy.ndimage.morphology import binary_fill_holes
 from skimage.color import rgb2gray, rgb2lab
 from tqdm import tqdm
+import os
 
 
 ##
@@ -190,7 +191,7 @@ class Slide:
                 tmpTile = self.slide.extract_area(self.tileMetadata[tileAddress]['x'], self.tileMetadata[tileAddress]
                                                   ['y'], self.tileMetadata[tileAddress]['width'], self.tileMetadata[tileAddress]['height'])
 
-                tmpTile.write_to_file(folder + fileName)
+                tmpTile.write_to_file(os.path.join(folder, fileName))
                 # return np.ndarray(buffer=tmpTile.write_to_memory(), dtype=self.__format_to_dtype[tmpTile.format], shape=[tmpTile.height, tmpTile.width, tmpTile.bands])
             else:
                 raise ValueError(
