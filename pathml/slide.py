@@ -181,7 +181,7 @@ class Slide:
         else:
             return np.unravel_index(tileIndex, (self.numTilesInX, self.numTilesInY), order='F')
 
-    def saveTile(self, tileAddress, fileName, folder):
+    def saveTile(self, tileAddress, fileName, folder='./'):
         if not hasattr(self, 'tileMetadata'):
             raise PermissionError(
                 'setTileProperties must be called before accessing tiles')
