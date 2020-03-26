@@ -113,11 +113,13 @@ class Slide:
             foregroundBinaryMask[address[1], address[0]] = int(self.tileMetadata[address]['foreground'] is True)
         return foregroundBinaryMask
 
-    def generateMask(self, foregroundSelector):
-        foregroundBinaryMask = np.zeros([self.numTilesInY, self.numTilesInX])
+    def generateInferenceMap(self, predictionSelector):
+        predictionMap = np.zeros([self.numTilesInY, self.numTilesInX])
         for address in self.iterateTiles():
-            foregroundBinaryMask[address[1], address[0]] = int(self.tileMetadata[address]['foreground'] is True)
-        return foregroundBinaryMask
+            predictionMap[address[1], address[0]] = int(self.tileMetadata[address]['prediction'][predictionSelector] is True)
+        if predictionMap not np.any(a):
+            raise ValueError('Generated inference map is empty. No predictions were found for the provided prediction selector. Please check the presence of relevant tags in the tile dictionary.')
+        return predictionMap
 
     def detectForeground(self, threshold, level=2):
         if not hasattr(self, 'tileMetadata'):
