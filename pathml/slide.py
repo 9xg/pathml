@@ -8,6 +8,7 @@ from scipy.ndimage.morphology import binary_fill_holes
 from skimage.color import rgb2gray, rgb2lab
 from tqdm import tqdm
 import os
+import pickle
 
 
 ##
@@ -107,19 +108,14 @@ class Slide:
                                              'y': y * (self.tileSize - self.tileOverlap), 'width': self.tileSize,
                                              'height': self.tileSize}
 
+    def loadTileDictionary(self, dictionaryFilePath):
+        pass
+
     def foregroundMask(self):
         foregroundBinaryMask = np.zeros([self.numTilesInY, self.numTilesInX])
         for address in self.iterateTiles():
             foregroundBinaryMask[address[1], address[0]] = int(self.tileMetadata[address]['foreground'] is True)
         return foregroundBinaryMask
-
-    def generateInferenceMap(self, predictionSelector):
-        predictionMap = np.zeros([self.numTilesInY, self.numTilesInX])
-        for address in self.iterateTiles():
-            predictionMap[address[1], address[0]] = int(self.tileMetadata[address]['prediction'][predictionSelector] is True)
-        if not np.any(predictionMap):
-            raise ValueError('Generated inference map is empty. No predictions were found for the provided prediction selector. Please check the presence of relevant tags in the tile dictionary.')
-        return predictionMap
 
     def detectForeground(self, threshold, level=2):
         if not hasattr(self, 'tileMetadata'):
@@ -198,6 +194,9 @@ class Slide:
             else:
                 raise ValueError(
                     'Tile address (' + str(tileAddress[0]) + ', ' + str(tileAddress[1]) + ') is out of bounds')
+
+    def saveTileDictionary(self, fileName, folder=os.getcwd()):
+        pickle.dump(self.tileMetadata, open(os.path.join(folder, fileName)+'.pml', 'wb'))
 
     def appendTag(self, tileAddress, key, val):
         self.tileMetadata[tileAddress][key] = val
