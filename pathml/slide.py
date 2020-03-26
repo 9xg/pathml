@@ -111,12 +111,6 @@ class Slide:
     def loadTileDictionary(self, dictionaryFilePath):
         pass
 
-    def foregroundMask(self):
-        foregroundBinaryMask = np.zeros([self.numTilesInY, self.numTilesInX])
-        for address in self.iterateTiles():
-            foregroundBinaryMask[address[1], address[0]] = int(self.tileMetadata[address]['foreground'] is True)
-        return foregroundBinaryMask
-
     def detectForeground(self, threshold, level=2):
         if not hasattr(self, 'tileMetadata'):
             raise PermissionError(
