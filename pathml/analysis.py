@@ -33,8 +33,8 @@ class Analysis:
         else:
             if self.__verbose:
                 print(self.__verbosePrefix + "Successfully loaded")
-            self.numTilesInX = max([key[0] for key in self.tileDictionary.keys()])
-            self.numTilesInY = max([key[1] for key in self.tileDictionary.keys()])
+            self.numTilesInX = max([key[0] for key in self.tileDictionary.keys()])+1
+            self.numTilesInY = max([key[1] for key in self.tileDictionary.keys()])+1
 
     def iterateTiles(self):
         for key, value in self.tileDictionary.items():
@@ -48,3 +48,10 @@ class Analysis:
         if not np.any(predictionMap):
             raise ValueError('Generated inference map is empty. No predictions were found for the provided prediction selector. Please check the presence of relevant tags in the tile dictionary.')
         return predictionMap
+
+    def generateForegroundMap(self):
+        foregroundBinaryMask = np.zeros([self.numTilesInY, self.numTilesInX])
+        for address in self.iterateTiles():
+            #print(address)
+            foregroundBinaryMask[address[1], address[0]] = int(self.tileDictionary[address]['foreground'] is True)
+        return foregroundBinaryMask
