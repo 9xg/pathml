@@ -117,7 +117,7 @@ class Slide:
         predictionMap = np.zeros([self.numTilesInY, self.numTilesInX])
         for address in self.iterateTiles():
             predictionMap[address[1], address[0]] = int(self.tileMetadata[address]['prediction'][predictionSelector] is True)
-        if predictionMap not np.any(a):
+        if not np.any(predictionMap):
             raise ValueError('Generated inference map is empty. No predictions were found for the provided prediction selector. Please check the presence of relevant tags in the tile dictionary.')
         return predictionMap
 
