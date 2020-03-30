@@ -6,8 +6,8 @@ import matplotlib.pyplot as plt
 demoPath = '/Users/gehrun01/Downloads/tumor_001.tif.pml'
 
 testAnalysis = Analysis(demoPath)
-mapClass1=testAnalysis.generateInferenceMap(predictionSelector=0)
-mapClass2=testAnalysis.generateInferenceMap(predictionSelector=1)
+mapClass0=testAnalysis.generateInferenceMap(predictionSelector=0)
+mapClass1=testAnalysis.generateInferenceMap(predictionSelector=1)
 foreground=testAnalysis.generateForegroundMap()
 
 plt.figure()
@@ -15,10 +15,10 @@ plt.imshow(foreground,vmin=0, vmax=1,cmap='gray')
 plt.title('Foreground')
 plt.show(block=False)
 plt.figure()
-plt.imshow(mapClass1,vmin=0, vmax=1)
+plt.imshow(mapClass0,vmin=0, vmax=1)
 plt.title('Class 0')
 plt.show(block=False)
 plt.figure()
-plt.imshow(mapClass2,vmin=0, vmax=1)
+plt.imshow(mapClass1,vmin=0, vmax=1)
 plt.title('Class 1')
 plt.show()

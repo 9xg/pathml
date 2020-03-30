@@ -18,16 +18,19 @@ class Analysis:
 
     __verbosePrefix = '[PathML] '
 
-    def __init__(self, tileDictionaryFilePath, verbose=False):
+    def __init__(self, tileDictionaryReference, verbose=False):
         # pv.cache_set_max(0)
         # pv.leak_set(True)
 
         self.__verbose = verbose
-        self.__tileDictionaryFilePath = tileDictionaryFilePath
+        self.__tileDictionaryReference = tileDictionaryReference
         try:
-            if self.__verbose:
-                print(self.__verbosePrefix + "Loading " + self.__tileDictionaryFilePath)
-            self.tileDictionary = pickle.load( open( tileDictionaryFilePath, "rb" ) )
+            if os.path.isfile(tileDictionaryReference):
+                if self.__verbose:
+                    print(self.__verbosePrefix + "Loading " + self.__tileDictionaryReference)
+                self.tileDictionary = pickle.load( open( tileDictionaryReference, "rb" ) )
+            elif isinstance(tileDictionaryReference, dict):
+                self.tileDictionary = self.__tileDictionaryReference
         except:
             raise FileNotFoundError('Tile dictionary could not be loaded')
         else:
@@ -52,6 +55,8 @@ class Analysis:
     def generateForegroundMap(self):
         foregroundBinaryMask = np.zeros([self.numTilesInY, self.numTilesInX])
         for address in self.iterateTiles():
-            #print(address)
-            foregroundBinaryMask[address[1], address[0]] = int(self.tileDictionary[address]['foreground'] is True)
+            if 'foreground' in self.tileDictionary[address]:
+                foregroundBinaryMask[address[1], address[0]] = int(self.tileDictionary[address]['foreground'] is True)
+        if not np.any(foregroundBinaryMask):
+            raise ValueError('Generated foreground map is empty. Please check the presence of relevant tags in the tile dictionary or change the foreground thresholding method.')
         return foregroundBinaryMask

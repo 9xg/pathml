@@ -93,7 +93,7 @@ class Slide:
         # TODO: Implement padding of boundary tiles
         self.tileOverlap = round(tileOverlap * tileSize)
         self.tileSize = tileSize
-        self.tileMetadata = {}
+        self.tileDictionary = {}
         # Create tile adresses and coordinates
         self.numTilesInX = self.slide.width // (
             self.tileSize - self.tileOverlap)
@@ -104,7 +104,7 @@ class Slide:
 
         for y in range(self.numTilesInY):
             for x in range(self.numTilesInX):
-                self.tileMetadata[(x, y)] = {'x': x * (self.tileSize - self.tileOverlap),
+                self.tileDictionary[(x, y)] = {'x': x * (self.tileSize - self.tileOverlap),
                                              'y': y * (self.tileSize - self.tileOverlap), 'width': self.tileSize,
                                              'height': self.tileSize}
 
@@ -112,9 +112,9 @@ class Slide:
         pass
 
     def detectForeground(self, threshold, level=2):
-        if not hasattr(self, 'tileMetadata'):
+        if not hasattr(self, 'tileDictionary'):
             raise PermissionError(
-                'setTileProperties must be called before foreground detection')
+                'Tile dictionary has to be created before foreground detection')
         # get low-level magnification
         self.lowMagSlide = pv.Image.new_from_file(
             self.__slideFilePath, level=level)
@@ -137,28 +137,28 @@ class Slide:
 
         self.foregroundTileAddresses = []
         for tileAddress in self.iterateTiles():
-            tileXPos = round(self.tileMetadata[tileAddress]['x'] * (1 / downsampleFactor))
-            tileYPos = round(self.tileMetadata[tileAddress]['y'] * (1 / downsampleFactor))
-            tileWidth = round(self.tileMetadata[tileAddress]['width'] * (1 / downsampleFactor))
-            tileHeight = round(self.tileMetadata[tileAddress]['height'] * (1 / downsampleFactor))
+            tileXPos = round(self.tileDictionary[tileAddress]['x'] * (1 / downsampleFactor))
+            tileYPos = round(self.tileDictionary[tileAddress]['y'] * (1 / downsampleFactor))
+            tileWidth = round(self.tileDictionary[tileAddress]['width'] * (1 / downsampleFactor))
+            tileHeight = round(self.tileDictionary[tileAddress]['height'] * (1 / downsampleFactor))
             localTmpTile = self.lowMagSlide[tileYPos:tileYPos + tileHeight, tileXPos:tileXPos + tileWidth]
             localTmpTileMean = np.nanmean(localTmpTile)
-            self.tileMetadata[tileAddress].update({'foregroundLevel': localTmpTileMean})
+            self.tileDictionary[tileAddress].update({'foregroundLevel': localTmpTileMean})
             if localTmpTileMean < thresholdLevel:
-                self.tileMetadata[tileAddress].update({'foreground': True})
+                self.tileDictionary[tileAddress].update({'foreground': True})
                 self.foregroundTileAddresses.append(tileAddress)
             else:
-                self.tileMetadata[tileAddress].update({'foreground': False})
+                self.tileDictionary[tileAddress].update({'foreground': False})
         return True
 
     def getTile(self, tileAddress, writeToNumpy=False):
-        if not hasattr(self, 'tileMetadata'):
+        if not hasattr(self, 'tileDictionary'):
             raise PermissionError(
                 'setTileProperties must be called before accessing tiles')
         if len(tileAddress) == 2 and isinstance(tileAddress, tuple):
             if self.numTilesInX >= tileAddress[0] and self.numTilesInY >= tileAddress[1]:
-                tmpTile = self.slide.extract_area(self.tileMetadata[tileAddress]['x'], self.tileMetadata[tileAddress]
-                                                  ['y'], self.tileMetadata[tileAddress]['width'], self.tileMetadata[tileAddress]['height'])
+                tmpTile = self.slide.extract_area(self.tileDictionary[tileAddress]['x'], self.tileDictionary[tileAddress]
+                                                  ['y'], self.tileDictionary[tileAddress]['width'], self.tileDictionary[tileAddress]['height'])
                 if writeToNumpy:
                     # Usingh writeToNumpy = True requires significant memory overhead as the tile is copied to memory
                     return np.ndarray(buffer=tmpTile.write_to_memory(), dtype=self.__format_to_dtype[tmpTile.format], shape=[tmpTile.height, tmpTile.width, tmpTile.bands])
@@ -175,13 +175,13 @@ class Slide:
             return np.unravel_index(tileIndex, (self.numTilesInX, self.numTilesInY), order='F')
 
     def saveTile(self, tileAddress, fileName, folder=os.getcwd()):
-        if not hasattr(self, 'tileMetadata'):
+        if not hasattr(self, 'tileDictionary'):
             raise PermissionError(
-                'setTileProperties must be called before accessing tiles')
+                'Tile dictionary has to be created before foreground detection')
         if len(tileAddress) == 2 and isinstance(tileAddress, tuple):
             if self.numTilesInX >= tileAddress[0] and self.numTilesInY >= tileAddress[1]:
-                tmpTile = self.slide.extract_area(self.tileMetadata[tileAddress]['x'], self.tileMetadata[tileAddress]
-                                                  ['y'], self.tileMetadata[tileAddress]['width'], self.tileMetadata[tileAddress]['height'])
+                tmpTile = self.slide.extract_area(self.tileDictionary[tileAddress]['x'], self.tileDictionary[tileAddress]
+                                                  ['y'], self.tileDictionary[tileAddress]['width'], self.tileDictionary[tileAddress]['height'])
 
                 tmpTile.write_to_file(os.path.join(folder, fileName))
                 # return np.ndarray(buffer=tmpTile.write_to_memory(), dtype=self.__format_to_dtype[tmpTile.format], shape=[tmpTile.height, tmpTile.width, tmpTile.bands])
@@ -190,10 +190,10 @@ class Slide:
                     'Tile address (' + str(tileAddress[0]) + ', ' + str(tileAddress[1]) + ') is out of bounds')
 
     def saveTileDictionary(self, fileName, folder=os.getcwd()):
-        pickle.dump(self.tileMetadata, open(os.path.join(folder, fileName)+'.pml', 'wb'))
+        pickle.dump(self.tileDictionary, open(os.path.join(folder, fileName)+'.pml', 'wb'))
 
     def appendTag(self, tileAddress, key, val):
-        self.tileMetadata[tileAddress][key] = val
+        self.tileDictionary[tileAddress][key] = val
 
     def thumbnail(self, level):
         self.lowMagSlide = pv.Image.new_from_file(
@@ -206,7 +206,7 @@ class Slide:
 
 # TODO: a check tileaddress function
     def iterateTiles(self, includeImage=False, writeToNumpy=False):
-        for key, value in self.tileMetadata.items():
+        for key, value in self.tileDictionary.items():
             # if value['foreground']==True: Inplement exclude background
             if includeImage:
                 yield key, self.getTile(key,writeToNumpy=writeToNumpy)
@@ -214,10 +214,10 @@ class Slide:
                 yield key
 
     def getTileCount(self, foregroundOnly=False):
-        if not hasattr(self, 'tileMetadata'):
+        if not hasattr(self, 'tileDictionary'):
             raise PermissionError(
                 'setTileProperties must be called before tile counting')
         if foregroundOnly:
             return len(self.foregroundTileAddresses)
         else:
-            return len(self.tileMetadata)
+            return len(self.tileDictionary)
