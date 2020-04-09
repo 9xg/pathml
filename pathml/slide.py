@@ -91,6 +91,7 @@ class Slide:
     def setTileProperties(self, tileSize, tileOverlap=0, unit='px'):
         # TODO: Implement units for tile size selection
         # TODO: Implement padding of boundary tiles
+        self.regionWorker = pv.Region.new(self.slide)
         self.tileOverlap = round(tileOverlap * tileSize)
         self.tileSize = tileSize
         self.tileDictionary = {}
@@ -151,22 +152,33 @@ class Slide:
                 self.tileDictionary[tileAddress].update({'foreground': False})
         return True
 
-    def getTile(self, tileAddress, writeToNumpy=False):
+    def getTile(self, tileAddress, writeToNumpy=False, useFetch=False):
         if not hasattr(self, 'tileDictionary'):
             raise PermissionError(
                 'setTileProperties must be called before accessing tiles')
         if len(tileAddress) == 2 and isinstance(tileAddress, tuple):
             if self.numTilesInX >= tileAddress[0] and self.numTilesInY >= tileAddress[1]:
-                tmpTile = self.slide.extract_area(self.tileDictionary[tileAddress]['x'], self.tileDictionary[tileAddress]
-                                                  ['y'], self.tileDictionary[tileAddress]['width'], self.tileDictionary[tileAddress]['height'])
-                if writeToNumpy:
-                    # Usingh writeToNumpy = True requires significant memory overhead as the tile is copied to memory
-                    return np.ndarray(buffer=tmpTile.write_to_memory(), dtype=self.__format_to_dtype[tmpTile.format], shape=[tmpTile.height, tmpTile.width, tmpTile.bands])
+                if useFetch:
+                    newTmpTile = self.fetchTile(self.tileDictionary[tileAddress]['width'], self.tileDictionary[tileAddress]['height'],
+                    self.tileDictionary[tileAddress]['x'], self.tileDictionary[tileAddress]['y'])
+                    if writeToNumpy:
+                        return np.ndarray(buffer=newTmpTile, dtype=np.uint8, shape=[self.tileDictionary[tileAddress]['width'], self.tileDictionary[tileAddress]['height'],4])
+                    else:
+                        return newTmpTile
                 else:
-                    return tmpTile
+                    tmpTile = self.slide.extract_area(self.tileDictionary[tileAddress]['x'], self.tileDictionary[tileAddress]
+                                                      ['y'], self.tileDictionary[tileAddress]['width'], self.tileDictionary[tileAddress]['height'])
+                    if writeToNumpy:
+                        # Usingh writeToNumpy = True requires significant memory overhead as the tile is copied to memory
+                        return np.ndarray(buffer=tmpTile.write_to_memory(), dtype=self.__format_to_dtype[tmpTile.format], shape=[tmpTile.height, tmpTile.width, tmpTile.bands])
+                    else:
+                        return tmpTile
             else:
                 raise ValueError(
                     'Tile address (' + str(tileAddress[0]) + ', ' + str(tileAddress[1]) + ') is out of bounds')
+
+    def fetchTile(self, patchWidth, patchHeight, patchX, patchY):
+        return self.regionWorker.fetch(patchWidth * patchX, patchHeight * patchY, patchWidth, patchHeight)
 
     def ind2sub(self, tileIndex, foregroundOnly=False):
         if foregroundOnly:
