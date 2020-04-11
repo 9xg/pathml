@@ -10,6 +10,8 @@ from tqdm import tqdm
 import os
 import pickle
 import torch
+from torchvision import transforms
+from .WholeSlideImageDataset import WholeSlideImageDataset
 
 
 ##
@@ -109,6 +111,7 @@ class Slide:
                 self.tileDictionary[(x, y)] = {'x': x * (self.tileSize - self.tileOverlap),
                                              'y': y * (self.tileSize - self.tileOverlap), 'width': self.tileSize,
                                              'height': self.tileSize}
+        return self
 
     def loadTileDictionary(self, dictionaryFilePath):
         pass
@@ -153,12 +156,17 @@ class Slide:
                 self.tileDictionary[tileAddress].update({'foreground': False})
         return True
 
-    def applyModel(self, device, model, dataset, batch_size, prediction_key = 'prediction'):
+    def applyModel(self, device, model, batch_size, predictionKey = 'prediction'):
         if not hasattr(self, 'tileDictionary'):
             raise PermissionError(
                 'setTileProperties must be called before accessing tiles')
-
-        pathSlideDataloader = torch.utils.data.DataLoader(dataset, batch_size=batch_size, shuffle=False, num_workers=16)
+        data_transforms = transforms.Compose([
+            transforms.Resize(224),
+            transforms.ToTensor(),
+            transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
+        ])
+        pathSlideDataset = WholeSlideImageDataset(self, transform=data_transforms)
+        pathSlideDataloader = torch.utils.data.DataLoader(pathSlideDataset, batch_size=batch_size, shuffle=False, num_workers=16)
         for inputs in tqdm(pathSlideDataloader):
             inputTile = inputs['image'].to(device)
             output = model(inputTile)
@@ -171,7 +179,7 @@ class Slide:
             for index in range(len(inputTile)):
                 tileAddress = (inputs['tileAddress'][0][index].item(),
                                inputs['tileAddress'][1][index].item())
-                self.appendTag(tileAddress, prediction_key, batch_prediction[index, ...])
+                self.appendTag(tileAddress, predictionKey, batch_prediction[index, ...])
 
     def getTile(self, tileAddress, writeToNumpy=False, useFetch=False):
         if not hasattr(self, 'tileDictionary'):
