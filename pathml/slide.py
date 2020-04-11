@@ -9,6 +9,7 @@ from skimage.color import rgb2gray, rgb2lab
 from tqdm import tqdm
 import os
 import pickle
+import torch
 
 
 ##
@@ -151,6 +152,26 @@ class Slide:
             else:
                 self.tileDictionary[tileAddress].update({'foreground': False})
         return True
+
+    def applyModel(self, device, model, dataset, batch_size, prediction_key = 'prediction'):
+        if not hasattr(self, 'tileDictionary'):
+            raise PermissionError(
+                'setTileProperties must be called before accessing tiles')
+
+        pathSlideDataloader = torch.utils.data.DataLoader(dataset, batch_size=batch_size, shuffle=False, num_workers=16)
+        for inputs in tqdm(pathSlideDataloader):
+            inputTile = inputs['image'].to(device)
+            output = model(inputTile)
+            output = output.to(device)
+
+            batch_prediction = torch.nn.functional.softmax(
+                output, dim=1).cpu().data.numpy()
+
+            # Reshape it is a Todo - instead of for looping
+            for index in range(len(inputTile)):
+                tileAddress = (inputs['tileAddress'][0][index].item(),
+                               inputs['tileAddress'][1][index].item())
+                self.appendTag(tileAddress, prediction_key, batch_prediction[index, ...])
 
     def getTile(self, tileAddress, writeToNumpy=False, useFetch=False):
         if not hasattr(self, 'tileDictionary'):

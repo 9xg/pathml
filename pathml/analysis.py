@@ -25,12 +25,12 @@ class Analysis:
         self.__verbose = verbose
         self.__tileDictionaryReference = tileDictionaryReference
         try:
-            if os.path.isfile(tileDictionaryReference):
+            if isinstance(tileDictionaryReference, dict):
+                self.tileDictionary = self.__tileDictionaryReference
+            elif os.path.isfile(tileDictionaryReference):
                 if self.__verbose:
                     print(self.__verbosePrefix + "Loading " + self.__tileDictionaryReference)
                 self.tileDictionary = pickle.load( open( tileDictionaryReference, "rb" ) )
-            elif isinstance(tileDictionaryReference, dict):
-                self.tileDictionary = self.__tileDictionaryReference
         except:
             raise FileNotFoundError('Tile dictionary could not be loaded')
         else:
@@ -43,11 +43,11 @@ class Analysis:
         for key, value in self.tileDictionary.items():
             yield key
 
-    def generateInferenceMap(self, predictionSelector):
+    def generateInferenceMap(self, predictionSelector, predictionKey='prediction'):
         predictionMap = np.zeros([self.numTilesInY, self.numTilesInX])
         for address in self.iterateTiles():
-            if 'prediction' in self.tileDictionary[address]:
-                predictionMap[address[1], address[0]] = float(self.tileDictionary[address]['prediction'][predictionSelector])
+            if predictionKey in self.tileDictionary[address]:
+                predictionMap[address[1], address[0]] = float(self.tileDictionary[address][predictionKey][predictionSelector])
         if not np.any(predictionMap):
             raise ValueError('Generated inference map is empty. No predictions were found for the provided prediction selector. Please check the presence of relevant tags in the tile dictionary.')
         return predictionMap
