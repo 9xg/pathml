@@ -18,7 +18,7 @@ def tissueDetector():
     model_ft.load_state_dict(torch.load('../pathml/models/deep-tissue-detector_densenet_state-dict.pt',map_location=torch.device('cpu')))
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     if torch.cuda.device_count() > 1:
-        model_ft = nn.DataParallel(model_ft)
+        model_ft = torch.nn.DataParallel(model_ft)
     model_ft.to(device).eval()
 
     return device, model_ft, data_transforms

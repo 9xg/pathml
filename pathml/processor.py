@@ -30,4 +30,12 @@ class Processor:
                 tileAddress = (inputs['tileAddress'][0][index].item(),
                                inputs['tileAddress'][1][index].item())
                 self.__slideObject.appendTag(tileAddress, predictionKey, batch_prediction[index, ...])
-        return self.__slideObject
+        return self
+
+    def adoptKeyFromTileDictionary(self, upsampleFactor=1):
+        for orphanTileAddress in self.__slideObject.iterateTiles():
+            self.__slideObject.tileDictionary[orphanTileAddress].update({'x': self.__slideObject.tileDictionary[orphanTileAddress]['x']*upsampleFactor,
+                                                            'y': self.__slideObject.tileDictionary[orphanTileAddress]['y']*upsampleFactor,
+                                                            'width': self.__slideObject.tileDictionary[orphanTileAddress]['width']*upsampleFactor,
+                                                            'height': self.__slideObject.tileDictionary[orphanTileAddress]['height']*upsampleFactor,})
+        return self.__slideObject.tileDictionary

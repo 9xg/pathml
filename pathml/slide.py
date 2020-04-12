@@ -201,25 +201,6 @@ class Slide:
                 raise ValueError(
                     'Tile address (' + str(tileAddress[0]) + ', ' + str(tileAddress[1]) + ') is out of bounds')
 
-    def adoptKeyFromTileDictionary(self, parentKey, tileDictionaryOrphan, orphanKey, orphanKeySelector=0,upsampleFactor=1):
-        orphanKeyMap = np.zeros([max([key[1] for key in tileDictionaryOrphan.keys()])+1, max([key[0] for key in tileDictionaryOrphan.keys()])+1])
-        for orphanTileAddress in self.iterateTiles(tileDictionaryOrphan):
-            tileDictionaryOrphan[orphanTileAddress].update({'x': tileDictionaryOrphan[orphanTileAddress]['x']*upsampleFactor,
-                                                            'y': tileDictionaryOrphan[orphanTileAddress]['y']*upsampleFactor,
-                                                            'width': tileDictionaryOrphan[orphanTileAddress]['width']*upsampleFactor,
-                                                            'height': tileDictionaryOrphan[orphanTileAddress]['height']*upsampleFactor,})
-            if orphanKey in tileDictionaryOrphan[orphanTileAddress]:
-                orphanKeyMap[orphanTileAddress[1], orphanTileAddress[0]] = float(tileDictionaryOrphan[orphanTileAddress][orphanKey][orphanKeySelector])
-
-        for tileAddress in self.iterateTiles():
-            tileXPos = self.tileDictionary[tileAddress]['x']
-            tileYPos = self.tileDictionary[tileAddress]['y']
-            tileWidth = self.tileDictionary[tileAddress]['width']
-            tileHeight = self.tileDictionary[tileAddress]['height']
-            localTmpTile = orphanKeyMap[tileYPos:tileYPos + tileHeight, tileXPos:tileXPos + tileWidth]
-            localTmpTileMean = np.nanmean(localTmpTile)
-            self.tileDictionary[tileAddress].update({'foregroundLevel': localTmpTileMean})
-
 
     def saveTileDictionary(self, fileName, folder=os.getcwd()):
         pickle.dump(self.tileDictionary, open(os.path.join(folder, fileName)+'.pml', 'wb'))
