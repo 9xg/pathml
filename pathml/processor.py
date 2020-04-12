@@ -38,4 +38,4 @@ class Processor:
                                                             'y': self.__slideObject.tileDictionary[orphanTileAddress]['y']*upsampleFactor,
                                                             'width': self.__slideObject.tileDictionary[orphanTileAddress]['width']*upsampleFactor,
                                                             'height': self.__slideObject.tileDictionary[orphanTileAddress]['height']*upsampleFactor,})
-        return self.__slideObject.tileDictionary
+        return self.__slideObject
