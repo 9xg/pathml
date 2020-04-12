@@ -9,9 +9,7 @@ from skimage.color import rgb2gray, rgb2lab
 from tqdm import tqdm
 import os
 import pickle
-import torch
-from torchvision import transforms
-from .WholeSlideImageDataset import WholeSlideImageDataset
+pv.cache_set_max(0)
 
 
 ##
@@ -51,8 +49,6 @@ class Slide:
     __verbosePrefix = '[PathML] '
 
     def __init__(self, slideFilePath, level=0, verbose=False):
-        # pv.cache_set_max(0)
-        # pv.leak_set(True)
 
         self.__verbose = verbose
         self.__slideFilePath = slideFilePath
@@ -156,31 +152,6 @@ class Slide:
                 self.tileDictionary[tileAddress].update({'foreground': False})
         return True
 
-    def applyModel(self, device, model, batch_size, predictionKey = 'prediction'):
-        if not hasattr(self, 'tileDictionary'):
-            raise PermissionError(
-                'setTileProperties must be called before accessing tiles')
-        data_transforms = transforms.Compose([
-            transforms.Resize(224),
-            transforms.ToTensor(),
-            transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
-        ])
-        pathSlideDataset = WholeSlideImageDataset(self, transform=data_transforms)
-        pathSlideDataloader = torch.utils.data.DataLoader(pathSlideDataset, batch_size=batch_size, shuffle=False, num_workers=16)
-        for inputs in tqdm(pathSlideDataloader):
-            inputTile = inputs['image'].to(device)
-            output = model(inputTile)
-            output = output.to(device)
-
-            batch_prediction = torch.nn.functional.softmax(
-                output, dim=1).cpu().data.numpy()
-
-            # Reshape it is a Todo - instead of for looping
-            for index in range(len(inputTile)):
-                tileAddress = (inputs['tileAddress'][0][index].item(),
-                               inputs['tileAddress'][1][index].item())
-                self.appendTag(tileAddress, predictionKey, batch_prediction[index, ...])
-
     def getTile(self, tileAddress, writeToNumpy=False, useFetch=False):
         if not hasattr(self, 'tileDictionary'):
             raise PermissionError(
@@ -230,6 +201,26 @@ class Slide:
                 raise ValueError(
                     'Tile address (' + str(tileAddress[0]) + ', ' + str(tileAddress[1]) + ') is out of bounds')
 
+    def adoptKeyFromTileDictionary(self, parentKey, tileDictionaryOrphan, orphanKey, orphanKeySelector=0,upsampleFactor=1):
+        orphanKeyMap = np.zeros([max([key[1] for key in tileDictionaryOrphan.keys()])+1, max([key[0] for key in tileDictionaryOrphan.keys()])+1])
+        for orphanTileAddress in self.iterateTiles(tileDictionaryOrphan):
+            tileDictionaryOrphan[orphanTileAddress].update({'x': tileDictionaryOrphan[orphanTileAddress]['x']*upsampleFactor,
+                                                            'y': tileDictionaryOrphan[orphanTileAddress]['y']*upsampleFactor,
+                                                            'width': tileDictionaryOrphan[orphanTileAddress]['width']*upsampleFactor,
+                                                            'height': tileDictionaryOrphan[orphanTileAddress]['height']*upsampleFactor,})
+            if orphanKey in tileDictionaryOrphan[orphanTileAddress]:
+                orphanKeyMap[orphanTileAddress[1], orphanTileAddress[0]] = float(tileDictionaryOrphan[orphanTileAddress][orphanKey][orphanKeySelector])
+
+        for tileAddress in self.iterateTiles():
+            tileXPos = self.tileDictionary[tileAddress]['x']
+            tileYPos = self.tileDictionary[tileAddress]['y']
+            tileWidth = self.tileDictionary[tileAddress]['width']
+            tileHeight = self.tileDictionary[tileAddress]['height']
+            localTmpTile = orphanKeyMap[tileYPos:tileYPos + tileHeight, tileXPos:tileXPos + tileWidth]
+            localTmpTileMean = np.nanmean(localTmpTile)
+            self.tileDictionary[tileAddress].update({'foregroundLevel': localTmpTileMean})
+
+
     def saveTileDictionary(self, fileName, folder=os.getcwd()):
         pickle.dump(self.tileDictionary, open(os.path.join(folder, fileName)+'.pml', 'wb'))
 
@@ -246,8 +237,9 @@ class Slide:
         return self.lowMagSlide
 
 # TODO: a check tileaddress function
-    def iterateTiles(self, includeImage=False, writeToNumpy=False):
-        for key, value in self.tileDictionary.items():
+    def iterateTiles(self, tileDictionary=False, includeImage=False, writeToNumpy=False):
+        tileDictionaryIterable = self.tileDictionary if not tileDictionary else tileDictionary
+        for key, value in tileDictionaryIterable.items():
             # if value['foreground']==True: Inplement exclude background
             if includeImage:
                 yield key, self.getTile(key,writeToNumpy=writeToNumpy)
