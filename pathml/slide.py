@@ -235,3 +235,163 @@ class Slide:
             return len(self.foregroundTileAddresses)
         else:
             return len(self.tileDictionary)
+
+    # ADAM EXPERIMENTAL
+    # Adds the overlap between all (desired) classes present in an annotation file and each tile in the tile dictionary
+    def addAnnotations(self, annotationFilePath, fileType, classesToAdd='all', magnificationLevel=0):
+        if fileType != ['asap', 'Asap', 'ASAP', 'qupath', 'Qupath', 'QuPath', 'QUPATH']:
+            raise ValueError('fileType must be ASAP or QuPath')
+        if fileType in ['qupath', 'Qupath', 'QuPath', 'QUPATH']: # REMOVE ONCE FIXED
+            raise ValueError('QuPath annotation files not currently supported')
+        if (not type(magnificationLevel) == int) or (magnificationLevel < 0):
+            raise ValueError('magnificationLevel must be an integer 0 or greater')
+        if 'openslide.level['+str(magnificationLevel)+'].downsample' not in self.slideProperties:
+            raise ValueError('magnificationLevel not present in slide')
+        if (classesToAdd != 'all') and (not isinstance(classesToAdd, list)):
+            raise ValueError("classestoAdd must be 'all' or a list")
+        if not os.path.isfile(annotationFilePath):
+            raise FileNotFoundError('Annotation file could not be loaded')
+        try:
+            tree = ET.parse(wsi_annotations[i])
+        except:
+            raise ImportError('Annotation file is not an xml file')
+
+        # ADD QUPATH GEOJSON SUPPORT
+
+        root = tree.getroot() # Get root of .xml tree
+        if not (root.tag == "ASAP_Annotations"_: # Check whether we actually deal with an ASAP .xml file
+            raise ImportError('Annotation file is not an ASAP xml file')
+
+        allAnnotations = root.find('Annotations') # Find all annotations for this slide
+        print('xml file valid - ' + str(len(allAnnotations)) + ' annotations found.') # Display number of found annotations
+
+        slideHeight = int(self.slideProperties['height'])
+        annotationScalingFactor = float(self.slideProperties['openslide.level[0].downsample'])/float(self.slideProperties['openslide.level['+str(magnificationLevel)+'].downsample'])
+        print("Scale: "+str(annotationScalingFactor))
+
+        # Iterate over all annotations to collect annotations in the same class
+        class_polys = {}
+        for annotation in allAnnotations:
+            annotation_class = annotation.attrib['PartOfGroup']
+            if (classesToAdd != 'all') and (annotation_class not in classesToAdd):
+                continue # skip annotations from classes not in the classesToAdd list
+
+            if annotation_class not in class_polys:
+                class_polys[annotation_class] = []
+
+            annotationTree = annotation.find('Coordinates')
+            polygon = []
+            for coordinate in annotationTree:
+                info = coordinate.attrib
+                polygon.append((float(info['X'])*annotationScalingFactor, float(info['Y'])*annotationScalingFactor))
+            polygonNp = np.asarray(polygon)
+            polygonNp[:,1] = slideHeight-polygonNp[:,1]
+            poly = geometry.Polygon(polygonNp).buffer(0)
+            class_polys[annotation_class].append(poly)
+
+        # Make a Shapely MultiPolygon for each class
+        class_multipolys = {ancl:geometry.MultiPolygon(ply) for (ancl,ply) in class_polys.items()}
+
+        # Iterate over all tiles in tile dictionary, marking the overlap of each class MultiPolygon with each tile
+        for address in self.iterateTiles():
+            x = self.tileDictionary[address]['x']
+            y = self.tileDictionary[address]['y']
+            height = self.tileDictionary[address]['height']
+            tile = geometry.box(x, (slideHeight-y)-height, x+height, slideHeight-y)
+
+            for class_name, class_multipoly in class_multipolys.items():
+                tile_class_overlap = tile.intersection(class_multipoly).area/(height**2)
+                self.tileDictionary[address].update({class_name+'Overlap': tile_class_overlap})
+
+    # ADAM EXPERIMENTAL
+    # Extract tiles into directory structure amenable to torch.utils.data.ConcatDataset
+    # extractionDirectory is expected to be of the form: '/path/to/tiles'
+    # classesToExtract is expected to be 'all' or a list
+    # tileAnnotationOverlapThreshold is expected to be a number greater than 0 and less than or equal to 1,
+    #   or a dictionary of such values, with a key for each class to extract
+    def extractAnnotationTiles(self, extractionDirectory, caseId='getFromSlideFilePath', classesToExtract='all', tileAnnotationOverlapThreshold=0.5, extractForegroundTilesOnly=False, extractTissueTilesOnly=False, tissueLevelThreshold=0.5):
+
+        # get case ID
+        if caseId == 'getFromSlideFilePath':
+            id = os.path.basename(self.__slideFilePath).split('.')[0]
+        elif type(caseId) == str:
+            id = caseId
+        else:
+            raise ValueError("caseId must be 'all' or a string")
+
+        # get classes to extract
+        extractionClasses = []
+        if classesToExtract == 'all':
+            for key, value in self.tileDictionary[list(self.tileDictionary.keys())[0]]:
+                if 'Overlap' in key:
+                    extractionClasses.append(key)
+        elif type(classesToExtract) == list:
+            extractionClasses = [classToExtract+'Overlap' for classToExtract in classesToExtract]
+            for extractionClass in extractionClasses:
+                if extractionClass not in self.tileDictionary[list(self.tileDictionary.keys())[0]]:
+                    raise ValueError(extractionClass+' not found in tile dictionary')
+        else:
+            raise ValueError("classesToExtract must be 'all' or a list of class names")
+        extractionClasses = [extractionClass.split('Overlap')[0] for extractionClass in extractionClasses]
+        print('Found '+str(len(extractionClasses))+' classes to extract:', extractionClasses)
+
+        # Convert annotationOverlapThreshold into a dictionary (if necessary)
+        annotationOverlapThresholdDict = {}
+        if (type(tileAnnotationOverlapThreshold) == int) or (type(tileAnnotationOverlapThreshold) == float):
+            if (tileAnnotationOverlapThreshold <= 0) or (tileAnnotationOverlapThreshold > 1):
+                raise ValueErrorr('tileAnnotationOverlapThreshold must be greater than 0 and less than or equal to 1')
+            for extractionClass in extractionClasses:
+                annotationOverlapThresholdDict[extractionClass] = tileAnnotationOverlapThreshold
+        elif type(tileAnnotationOverlapThreshold) == dict:
+            for ec, taot in tileAnnotationOverlapThreshold.items():
+                if ec not in extractionClasses:
+                    raise ValueError('Class '+str(ec)+' present as a key in tileAnnotationOverlapThreshold but not present in classes to extract')
+                if ((type(taot) != int) and (type(taot) != float)) or ((taot <= 0) or (taot > 1)):
+                    raise ValueError('Tile annotation overlap threshold of class '+str(ec)+' must be a number greater than zero and less than or equal to 1')
+            for extractionClass in extractionClasses:
+                if extractionClass not in tileAnnotationOverlapThreshold:
+                    raise ValueError('Class '+str(extractionClass)+' present in classes to extract but not present as a key in tileAnnotationOverlapThreshold')
+            annotationOverlapThresholdDict = tileAnnotationOverlapThreshold
+        else:
+            raise ValueError('tileAnnotationOverlapThreshold must be a dictionary or number greater than 0 and less than or equal to 1')
+
+        # Create empty class tile directories
+        for extractionClass in extractionClasses:
+            os.path.makdirs(os.path.join(extractionDirectory, id, extractionClass), exist_ok=True)
+
+        if ((type(tissueLevelThreshold) != int) and (type(tissueLevelThreshold) != float)) or ((tissueLevelThreshold <= 0) or (tissueLevelThreshold > 1)):
+            raise ValueError('tissueLevelThreshold must be a number greater than zero and less than or equal to 1')
+
+        # Extract tiles
+        for address in self.iterateTiles():
+            if extractTissueTilesOnly:
+                if 'tissueLevel' not in self.tileDictionary[address]:
+                    raise ValueError('Deep tissue detection must be performed before extractTissueTilesOnly can be set to True')
+                if self.tileDictionary[address]['tissueLevel'] >= tissueLevelThreshold: # do not extract background and artifact tiles
+                    for extractionClass in extractionClasses:
+                        if self.tileDictionary[address][extractionClass+'Overlap'] >= annotationOverlapThresholdDict[extractionClass]:
+                            area = self.getTile(address)
+                            area.write_to_file(os.path.join(extractionDirectory, id,
+                                extractionClass, id+'_'+str(self.tileDictionary[address]['x'])+'x_'+str(self.tileDictionary[address]['y'])+'y'+'_'+str(self.tileDictionary[address]['height'])+'tilesize.jpg'), Q=100)
+
+            elif extractForegroundTilesOnly:
+                if 'foreground' not in self.tileDictionary[address]:
+                    raise ValueError('Foreground detection must be performed with detectForeground() before extractForegroundTilesOnly can be set to True')
+                if self.tileDictionary[address]['foreground']:
+                    for extractionClass in extractionClasses:
+                        if self.tileDictionary[address][extractionClass+'Overlap'] >= annotationOverlapThresholdDict[extractionClass]:
+                            area = self.getTile(address)
+                            area.write_to_file(os.path.join(extractionDirectory, id,
+                                extractionClass, id+'_'+str(self.tileDictionary[address]['x'])+'x_'+str(self.tileDictionary[address]['y'])+'y'+'_'+str(self.tileDictionary[address]['height'])+'tilesize.jpg'), Q=100)
+
+            else:
+                for extractionClass in extractionClasses:
+                    if self.tileDictionary[address][extractionClass+'Overlap'] >= annotationOverlapThresholdDict[extractionClass]:
+                        area = self.getTile(address)
+                        area.write_to_file(os.path.join(extractionDirectory, id,
+                            extractionClass, id+'_'+str(self.tileDictionary[address]['x'])+'x_'+str(self.tileDictionary[address]['y'])+'y'+'_'+str(self.tileDictionary[address]['height'])+'tilesize.jpg'), Q=100)
+
+
+    # ADAM EXPERIMENTAL
+    def extractRandomUnannotatedTiles(self, extractionDirectory, numTilesToExtract=50, unannotatedClassName='unannotated', caseId='getFromSlideFilePath', extractForegroundTilesOnly=False, extractTissueTilesOnly=False, tissueLevelThreshold=0.5, seed=366):
+        random.seed(366)
