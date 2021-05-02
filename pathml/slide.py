@@ -6,7 +6,10 @@ from skimage.filters import threshold_triangle, threshold_otsu
 from skimage.morphology import binary_dilation, remove_small_objects
 from scipy.ndimage.morphology import binary_fill_holes
 from skimage.color import rgb2gray, rgb2lab
+import xml.etree.ElementTree as ET
+from shapely import geometry
 from tqdm import tqdm
+import random
 import os
 import pickle
 pv.cache_set_max(0)
@@ -60,8 +63,7 @@ class Slide:
             self.tileDictionary = contents['tileDictionary']
         else: # initing from WSI file (from scratch)
             self.slideFilePath = slideFilePath
-
-        print("PATH:", self.slideFilePath)
+        self.slideFileName = os.path.basename(self.slideFilePath).split('.')[0]
 
         try:
             if self.__verbose:
@@ -241,11 +243,20 @@ class Slide:
     #def saveTileDictionary(self, fileName, folder=os.getcwd()):
     #    pickle.dump(self.tileDictionary, open(os.path.join(folder, fileName)+'.pml', 'wb'))
 
-    def saveSelf(self, fileName, folder=os.getcwd()):
+    def saveSelf(self, caseId='getFromSlideFilePath', folder=os.getcwd()):
         if not hasattr(self, 'tileDictionary'):
             raise PermissionError(
                 'setTileProperties must be called before saving self')
-        pickle.dump({'slideFilePath': self.slideFilePath, 'tileDictionary': self.tileDictionary}, open(os.path.join(folder, fileName)+'.pml', 'wb'))
+
+        # get case ID
+        if caseId == 'getFromSlideFilePath':
+            id = self.slideFileName
+        elif type(caseId) == str:
+            id = caseId
+        else:
+            raise ValueError("caseId must be 'getFromSlideFilePath' to extract caseId automatically or a string")
+
+        pickle.dump({'slideFilePath': self.slideFilePath, 'tileDictionary': self.tileDictionary}, open(os.path.join(folder, id)+'.pml', 'wb'))
 
     def appendTag(self, tileAddress, key, val):
         if not hasattr(self, 'tileDictionary'):
@@ -285,6 +296,7 @@ class Slide:
     def addAnnotations(self, annotationFilePath, classesToAdd='all', magnificationLevel=0):
         """
         Adds the overlap between all (desired) classes present in an annotation file and each tile in the tile dictionary
+        Annotations within groups in ASAP are taken to be within one class, where the name of the group is the name of the class
         annotationFilePath must point to either an xml file from the ASAP software or a GeoJSON file from the QuPath software
         """
 
@@ -303,10 +315,6 @@ class Slide:
             raise ValueError("classestoAdd must be 'all' or a list")
         if not os.path.isfile(annotationFilePath):
             raise FileNotFoundError('Annotation file could not be loaded')
-        try:
-            tree = ET.parse(wsi_annotations[i])
-        except:
-            raise ImportError('Annotation file is not an xml file')
 
         # Check if annotationFilePath points to an ASAP xml file or a QuPath GeoJSON file
         with open(annotationFilePath) as unknownFile:
@@ -320,6 +328,10 @@ class Slide:
 
         # Turn ASAP xml annotations into a dict of multipolygons, with one multipolygon for each class
         if fileType == 'asap_xml':
+            try:
+                tree = ET.parse(annotationFilePath)
+            except:
+                raise ImportError('Annotation file is not an xml file')
             root = tree.getroot() # Get root of .xml tree
             if not root.tag == "ASAP_Annotations": # Check whether we actually deal with an ASAP .xml file
                 raise ImportError('Annotation file is not an ASAP xml file')
@@ -387,16 +399,16 @@ class Slide:
 
         # get case ID
         if caseId == 'getFromSlideFilePath':
-            id = os.path.basename(self.slideFilePath).split('.')[0]
+            id = self.slideFileName
         elif type(caseId) == str:
             id = caseId
         else:
-            raise ValueError("caseId must be 'all' or a string")
+            raise ValueError("caseId must be 'getFromSlideFilePath' to extract caseId automatically or a string")
 
         # get classes to extract
         extractionClasses = []
         if classesToExtract == 'all':
-            for key, value in self.tileDictionary[list(self.tileDictionary.keys())[0]]:
+            for key, value in self.tileDictionary[list(self.tileDictionary.keys())[0]].items():
                 if 'Overlap' in key:
                     extractionClasses.append(key)
         elif type(classesToExtract) == list:
@@ -407,7 +419,7 @@ class Slide:
         else:
             raise ValueError("classesToExtract must be 'all' or a list of class names")
         extractionClasses = [extractionClass.split('Overlap')[0] for extractionClass in extractionClasses]
-        print('Found '+str(len(extractionClasses))+' classes to extract:', extractionClasses)
+        print('Found '+str(len(extractionClasses))+' class(es) to extract:', extractionClasses)
 
         # Convert annotationOverlapThreshold into a dictionary (if necessary)
         annotationOverlapThresholdDict = {}
@@ -429,17 +441,10 @@ class Slide:
         else:
             raise ValueError('tileAnnotationOverlapThreshold must be a dictionary or number greater than 0 and less than or equal to 1')
 
-        # Create empty class tile directories
-        for extractionClass in extractionClasses:
-            try:
-                os.path.makdirs(os.path.join(extractionDirectory, id, extractionClass), exist_ok=True)
-            except:
-                raise ValueError(os.path.join(extractionDirectory, id, extractionClass)+' is not a valid path')
-
         if ((type(tissueLevelThreshold) != int) and (type(tissueLevelThreshold) != float)) or ((tissueLevelThreshold <= 0) or (tissueLevelThreshold > 1)):
             raise ValueError('tissueLevelThreshold must be a number greater than zero and less than or equal to 1')
 
-        # Extract tiles
+        # Get tiles to extract
         annotatedTileAddresses = {extractionClass: [] for extractionClass in extractionClasses}
         for address in self.iterateTiles():
             if extractTissueTilesOnly:
@@ -483,13 +488,13 @@ class Slide:
                     raise Warning(str(len(annotatedTileAddresses[extractionClass]))+' suitable '+extractionClass+' tiles found but requested '+str(numTilesToExtractPerClass)+' tiles to extract')
                 annotatedTilesToExtract[extractionClass] = random.sample(annotatedTileAddresses[extractionClass], numTilesToExtractPerClass)
             #annotatedTilesToExtract = {extractionClass: random.sample(annotatedTileAddresses[extractionClass], numTilesToExtractPerClass) for extractionClass in extractionClasses}
-        elif type(numTilesToExtractPerClass) == 'all':
+        elif numTilesToExtractPerClass == 'all':
             for extractionClass in extractionClasses:
                 if len(annotatedTileAddresses[extractionClass]) == 0:
                     raise Warning('0 suitable '+extractionClass+' tiles found')
-                if len(annotatedTileAddresses[extractClass]) > 500:
-                    raise Warning(str(len(annotatedTileAddresses[extractClass]))+' suitable '+extractionClass+' tiles found')
-                 annotatedTilesToExtract[extractionClass] = annotatedTileAddresses[extractionClass]
+                if len(annotatedTileAddresses[extractionClass]) > 500:
+                    raise Warning(str(len(annotatedTileAddresses[extractionClass]))+' suitable '+extractionClass+' tiles found')
+                annotatedTilesToExtract[extractionClass] = annotatedTileAddresses[extractionClass]
 
         elif type(numTilesToExtractPerClass) == dict:
             for ec,tc in numTilesToExtractPerClass.items():
@@ -509,6 +514,13 @@ class Slide:
 
         else:
             raise ValueError("numTilesToExtractPerClass must be a positive integer, a dictionary, or 'all'")
+
+        # Create empty class tile directories
+        for extractionClass in extractionClasses:
+            try:
+                os.makedirs(os.path.join(extractionDirectory, id, extractionClass), exist_ok=True)
+            except:
+                raise ValueError(os.path.join(extractionDirectory, id, extractionClass)+' is not a valid path')
 
         # Extract tiles
         for ec,tte in annotatedTilesToExtract.items():
@@ -542,17 +554,11 @@ class Slide:
 
         # get case ID
         if caseId == 'getFromSlideFilePath':
-            id = os.path.basename(self.slideFilePath).split('.')[0]
+            id = self.slideFileName
         elif type(caseId) == str:
             id = caseId
         else:
             raise ValueError("caseId must be 'all' or a string")
-
-        # Create empty class tile directory
-        try:
-            os.path.makdirs(os.path.join(extractionDirectory, id, unannotatedClassName), exist_ok=True)
-        except:
-            raise ValueError(os.path.join(extractionDirectory, id, unannotatedClassName)+' is not a valid path')
 
         if ((type(tissueLevelThreshold) != int) and (type(tissueLevelThreshold) != float)) or ((tissueLevelThreshold <= 0) or (tissueLevelThreshold > 1)):
             raise ValueError('tissueLevelThreshold must be a number greater than zero and less than or equal to 1')
@@ -561,11 +567,12 @@ class Slide:
 
         # get classes to NOT extract
         annotationClasses = []
-        for key, value in self.tileDictionary[list(self.tileDictionary.keys())[0]]:
+        for key, value in self.tileDictionary[list(self.tileDictionary.keys())[0]].items():
             if 'Overlap' in key:
                 annotationClasses.append(key)
         if len(annotationClasses) == 0:
-            raise Warning('No annotations currently added to Slide tile dictionary; annotations can be added with addAnnotations()')
+            print('No annotations found in tile dictionary; sampling randomly from all suitable tiles')
+            #raise Warning('No annotations currently added to Slide tile dictionary; annotations can be added with addAnnotations()')
 
         # Collect all unannotated tiles
         unannotatedTileAddresses = []
@@ -607,11 +614,20 @@ class Slide:
             raise Warning('0 unannotated tiles found')
         if len(unannotatedTileAddresses) < numTilesToExtract:
             raise Warning(str(len(unannotatedTileAddresses))+' unannotated tiles found but requested '+str(numTilesToExtract)+' tiles to extract')
+        print(str(len(unannotatedTileAddresses))+' unannotated tiles found in total')
+
+        # Create empty class tile directory
+        try:
+            os.makedirs(os.path.join(extractionDirectory, id, unannotatedClassName), exist_ok=True)
+        except:
+            raise ValueError(os.path.join(extractionDirectory, id, unannotatedClassName)+' is not a valid path')
 
         # Extract the desired number of unannotated tiles
         unannotatedTilesToExtract = random.sample(unannotatedTileAddresses, numTilesToExtract)
         print("Extracting "+str(len(unannotatedTilesToExtract))+" "+unannotatedClassName+" tiles...")
-        for unannotatedTileToExtract in unannotatedTilesToExtract:
-            area = self.getTile(unannotatedTileToExtract)
+        #print("Tiles to extract:", unannotatedTilesToExtract)
+        for tl in unannotatedTilesToExtract:
+            #print("On tile:", tl)
+            area = self.getTile(tl)
             area.write_to_file(os.path.join(extractionDirectory, id, unannotatedClassName,
-                id+'_'+unannotatedClassName+'_'+str(self.tileDictionary[address]['x'])+'x_'+str(self.tileDictionary[address]['y'])+'y'+'_'+str(self.tileDictionary[address]['height'])+'tilesize.jpg'), Q=100)
+                id+'_'+unannotatedClassName+'_'+str(self.tileDictionary[tl]['x'])+'x_'+str(self.tileDictionary[tl]['y'])+'y'+'_'+str(self.tileDictionary[tl]['height'])+'tilesize.jpg'), Q=100)
