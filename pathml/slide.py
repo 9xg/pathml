@@ -1,3 +1,6 @@
+# This is the experimental version of slide with annotation and tile extraction
+# capabilities
+
 import numpy as np
 import pyvips as pv
 from joblib import Parallel, delayed
