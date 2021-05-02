@@ -240,8 +240,8 @@ class Slide:
                     'Tile address (' + str(tileAddress[0]) + ', ' + str(tileAddress[1]) + ') is out of bounds')
 
 
-    #def saveTileDictionary(self, fileName, folder=os.getcwd()):
-    #    pickle.dump(self.tileDictionary, open(os.path.join(folder, fileName)+'.pml', 'wb'))
+    def saveTileDictionary(self, fileName, folder=os.getcwd()):
+        pickle.dump(self.tileDictionary, open(os.path.join(folder, fileName)+'.pml', 'wb'))
 
     def saveSelf(self, caseId='getFromSlideFilePath', folder=os.getcwd()):
         if not hasattr(self, 'tileDictionary'):
