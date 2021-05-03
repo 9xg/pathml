@@ -316,6 +316,7 @@ class Slide:
         Adds the overlap between all (desired) classes present in an annotation file and each tile in the tile dictionary
         Annotations within groups in ASAP are taken to be within one class, where the name of the group is the name of the class
         annotationFilePath must point to either an xml file from the ASAP software or a GeoJSON file from the QuPath software
+        negativeClass is the name of the class of negative annotations (donut holes) to subtract from the other annotations
         """
 
         #if fileType != ['asap', 'Asap', 'ASAP', 'qupath', 'Qupath', 'QuPath', 'QUPATH']:
@@ -325,13 +326,18 @@ class Slide:
         if not hasattr(self, 'tileDictionary'):
             raise PermissionError(
                 'setTileProperties must be called before adding annotations')
-        for address in self.iterateTiles():
-            for key in self.tileDictionary[address].copy():
-                if 'Overlap' in key:
-                    if overwriteExistingAnnotations:
+        foundOverlap = False
+        for k in self.tileDictionary[list(self.tileDictionary.keys())[0]]:
+            if if 'Overlap' in k:
+                foundOverlap = True
+                if not overwriteExistingAnnotations:
+                    raise Warning('Annotatons have already been added to the tile dictionary. Use overwriteExistingAnnotations if you wish to write over them')
+        if foundOverlap:
+            for address in self.iterateTiles():
+                for key in self.tileDictionary[address].copy():
+                    if 'Overlap' in key:
                         del self.tileDictionary[address][key]
-                    else:
-                        raise Warning('Annotatons have already been added to the tile dictionary. Use overwriteExistingAnnotations if you wish to write over them')
+
         if (not type(magnificationLevel) == int) or (magnificationLevel < 0):
             raise ValueError('magnificationLevel must be an integer 0 or greater')
         if 'openslide.level['+str(magnificationLevel)+'].downsample' not in self.slideProperties:
@@ -517,7 +523,7 @@ class Slide:
                 if len(annotatedTileAddresses[extractionClass]) == 0:
                     raise Warning('0 suitable '+extractionClass+' tiles found')
                 if len(annotatedTileAddresses[extractionClass]) < numTilesToExtractPerClass:
-                    raise Warning(str(len(annotatedTileAddresses[extractionClass]))+' suitable '+extractionClass+' tiles found but requested '+str(numTilesToExtractPerClass)+' tiles to extract')
+                    print('Warning: '+str(len(annotatedTileAddresses[extractionClass]))+' suitable '+extractionClass+' tiles found but requested '+str(numTilesToExtractPerClass)+' tiles to extract. Extracting tiles found...')
                 annotatedTilesToExtract[extractionClass] = random.sample(annotatedTileAddresses[extractionClass], numTilesToExtractPerClass)
             #annotatedTilesToExtract = {extractionClass: random.sample(annotatedTileAddresses[extractionClass], numTilesToExtractPerClass) for extractionClass in extractionClasses}
         elif numTilesToExtractPerClass == 'all':
@@ -525,7 +531,7 @@ class Slide:
                 if len(annotatedTileAddresses[extractionClass]) == 0:
                     raise Warning('0 suitable '+extractionClass+' tiles found')
                 if len(annotatedTileAddresses[extractionClass]) > 500:
-                    raise Warning(str(len(annotatedTileAddresses[extractionClass]))+' suitable '+extractionClass+' tiles found')
+                    print('Warning: '+str(len(annotatedTileAddresses[extractionClass]))+' suitable '+extractionClass+' tiles found')
                 annotatedTilesToExtract[extractionClass] = annotatedTileAddresses[extractionClass]
 
         elif type(numTilesToExtractPerClass) == dict:
