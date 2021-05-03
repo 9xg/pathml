@@ -9,6 +9,11 @@ from skimage.filters import threshold_triangle, threshold_otsu
 from skimage.morphology import binary_dilation, remove_small_objects
 from scipy.ndimage.morphology import binary_fill_holes
 from skimage.color import rgb2gray, rgb2lab
+from skimage.transform import resize
+import matplotlib.pyplot as plt
+from pathlib import Path
+from pathml.processor import Processor
+from pathml.models.tissuedetector import tissueDetector
 import xml.etree.ElementTree as ET
 from shapely import geometry
 from tqdm import tqdm
@@ -56,17 +61,22 @@ class Slide:
 
     # If slideFilePath can be a path to a WSI (to make from scratch),
     # or a path to a .pml file (to make from a pre-existing pathml Slide saved with saveSelf())
-    def __init__(self, slideFilePath, level=0, verbose=False):
+    def __init__(self, slideFilePath, newSlideFilePath=False, level=0, verbose=False):
 
         self.__verbose = verbose
 
         if slideFilePath[-4:] == '.pml': # initing from .pml file
             contents = pickle.load(open(slideFilePath, 'rb'))
-            self.slideFilePath = contents['slideFilePath']
+            if newSlideFilePath:
+                self.slideFilePath = newSlideFilePath
+            else:
+                self.slideFilePath = contents['slideFilePath']
             self.tileDictionary = contents['tileDictionary']
+            if "rawTissueDetectionMap" in contents:
+                self.rawTissueDetectionMap = contents['rawTissueDetectionMap']
         else: # initing from WSI file (from scratch)
             self.slideFilePath = slideFilePath
-        self.slideFileName = os.path.basename(self.slideFilePath).split('.')[0]
+        self.slideFileName = Path(self.slideFilePath).stem
 
         try:
             if self.__verbose:
@@ -246,20 +256,25 @@ class Slide:
     def saveTileDictionary(self, fileName, folder=os.getcwd()):
         pickle.dump(self.tileDictionary, open(os.path.join(folder, fileName)+'.pml', 'wb'))
 
-    def saveSelf(self, caseId='getFromSlideFilePath', folder=os.getcwd()):
+    def saveSelf(self, fileName=False, folder=os.getcwd()):
         if not hasattr(self, 'tileDictionary'):
-            raise PermissionError(
-                'setTileProperties must be called before saving self')
+            raise PermissionError('setTileProperties must be called before saving self')
 
         # get case ID
-        if caseId == 'getFromSlideFilePath':
-            id = self.slideFileName
-        elif type(caseId) == str:
-            id = caseId
+        if fileName:
+            if type(fileName) == str:
+                id = fileName
+            else:
+                raise ValueError('fileName must be a string')
         else:
-            raise ValueError("caseId must be 'getFromSlideFilePath' to extract caseId automatically or a string")
+            id = self.slideFileName
 
-        pickle.dump({'slideFilePath': self.slideFilePath, 'tileDictionary': self.tileDictionary}, open(os.path.join(folder, id)+'.pml', 'wb'))
+        if hasattr(self, 'rawTissueDetectionMap'):
+            outputDict = {'slideFilePath': self.slideFilePath, 'tileDictionary': self.tileDictionary, 'rawTissueDetectionMap': self.rawTissueDetectionMap}
+        else:
+            outputDict = {'slideFilePath': self.slideFilePath, 'tileDictionary': self.tileDictionary}
+
+        pickle.dump(outputDict, open(os.path.join(folder, id)+'.pml', 'wb'))
 
     def appendTag(self, tileAddress, key, val):
         if not hasattr(self, 'tileDictionary'):
@@ -296,7 +311,7 @@ class Slide:
             return len(self.tileDictionary)
 
     # ADAM EXPERIMENTAL
-    def addAnnotations(self, annotationFilePath, classesToAdd='all', magnificationLevel=0):
+    def addAnnotations(self, annotationFilePath, classesToAdd='all', magnificationLevel=0, overwriteExistingAnnotations=False):
         """
         Adds the overlap between all (desired) classes present in an annotation file and each tile in the tile dictionary
         Annotations within groups in ASAP are taken to be within one class, where the name of the group is the name of the class
@@ -310,6 +325,13 @@ class Slide:
         if not hasattr(self, 'tileDictionary'):
             raise PermissionError(
                 'setTileProperties must be called before adding annotations')
+        for address in self.iterateTiles():
+            for key in self.tileDictionary[address].copy():
+                if 'Overlap' in key:
+                    if overwriteExistingAnnotations:
+                        del self.tileDictionary[address][key]
+                    else:
+                        raise Warning('Annotatons have already been added to the tile dictionary. Use overwriteExistingAnnotations if you wish to write over them')
         if (not type(magnificationLevel) == int) or (magnificationLevel < 0):
             raise ValueError('magnificationLevel must be an integer 0 or greater')
         if 'openslide.level['+str(magnificationLevel)+'].downsample' not in self.slideProperties:
@@ -385,7 +407,7 @@ class Slide:
                 self.tileDictionary[address].update({class_name+'Overlap': tile_class_overlap})
 
     # ADAM EXPERIMENTAL
-    def extractAnnotationTiles(self, extractionDirectory, numTilesToExtractPerClass='all', caseId='getFromSlideFilePath', classesToExtract='all', tileAnnotationOverlapThreshold=0.5, extractForegroundTilesOnly=False, extractTissueTilesOnly=False, tissueLevelThreshold=0.5, seed=366):
+    def extractAnnotationTiles(self, extractionDirectory, numTilesToExtractPerClass='all', tileDirName=False, classesToExtract='all', tileAnnotationOverlapThreshold=0.5, extractForegroundTilesOnly=False, extractTissueTilesOnly=False, tissueLevelThreshold=0.5, seed=False):
         """
         Extract tiles that overlap with annotations into directory structure amenable to torch.utils.data.ConcatDataset
         extractionDirectory is expected to be of the form: '/path/to/tiles'
@@ -398,15 +420,22 @@ class Slide:
             raise PermissionError(
                 'setTileProperties must be called before extracting tiles')
 
-        random.seed(seed)
+        if extractForegroundTilesOnly and extractTissueTilesOnly:
+            raise ValueError('Only one of extractTissueTilesOnly and extractForegroundTilesOnly can be set to True, not both')
+
+        if seed:
+            if type(seed) != int:
+                raise ValueError('Seed must be an integer')
+            random.seed(seed)
 
         # get case ID
-        if caseId == 'getFromSlideFilePath':
-            id = self.slideFileName
-        elif type(caseId) == str:
-            id = caseId
+        if tileDirName:
+            if type(tileDirName) != str:
+                raise ValueError("tileDirName must be a string")
+            else:
+                id = tileDirName
         else:
-            raise ValueError("caseId must be 'getFromSlideFilePath' to extract caseId automatically or a string")
+            id = self.slideFileName
 
         # get classes to extract
         extractionClasses = []
@@ -452,7 +481,7 @@ class Slide:
         for address in self.iterateTiles():
             if extractTissueTilesOnly:
                 if 'tissueLevel' not in self.tileDictionary[address]:
-                    raise ValueError('Deep tissue detection must be performed before extractTissueTilesOnly can be set to True')
+                    raise ValueError('Deep tissue detection must be performed with detectTissue() before extractTissueTilesOnly can be set to True')
                 if self.tileDictionary[address]['tissueLevel'] >= tissueLevelThreshold: # do not extract background and artifact tiles
                     for extractionClass in extractionClasses:
                         if self.tileDictionary[address][extractionClass+'Overlap'] >= annotationOverlapThresholdDict[extractionClass]:
@@ -543,7 +572,7 @@ class Slide:
             # automatically detect whether it is an asap xml or qupath geojson (and if not throw error)
 
     # ADAM EXPERIMENTAL
-    def extractRandomUnannotatedTiles(self, extractionDirectory, numTilesToExtract=50, unannotatedClassName='unannotated', caseId='getFromSlideFilePath', extractForegroundTilesOnly=False, extractTissueTilesOnly=False, tissueLevelThreshold=0.5, seed=366):
+    def extractRandomUnannotatedTiles(self, extractionDirectory, numTilesToExtract=50, unannotatedClassName='unannotated', tileDirName=False, extractForegroundTilesOnly=False, extractTissueTilesOnly=False, tissueLevelThreshold=0.5, seed=False):
         """
         Extract randomly selected tiles that don't overlap any annotations into directory structure amenable to torch.utils.data.ConcatDataset
         extractionDirectory is expected to be of the form: '/path/to/tiles'
@@ -553,15 +582,22 @@ class Slide:
             raise PermissionError(
                 'setTileProperties must be called before extracting tiles')
 
-        random.seed(seed)
+        if extractForegroundTilesOnly and extractTissueTilesOnly:
+            raise ValueError('Only one of extractTissueTilesOnly and extractForegroundTilesOnly can be set to True, not both')
+
+        if seed:
+            if type(seed) != int:
+                raise ValueError('Seed must be an integer')
+            random.seed(seed)
 
         # get case ID
-        if caseId == 'getFromSlideFilePath':
-            id = self.slideFileName
-        elif type(caseId) == str:
-            id = caseId
+        if tileDirName:
+            if type(tileDirName) != str:
+                raise ValueError("tileDirName must be a string")
+            else:
+                id = tileDirName
         else:
-            raise ValueError("caseId must be 'all' or a string")
+            id = self.slideFileName
 
         if ((type(tissueLevelThreshold) != int) and (type(tissueLevelThreshold) != float)) or ((tissueLevelThreshold <= 0) or (tissueLevelThreshold > 1)):
             raise ValueError('tissueLevelThreshold must be a number greater than zero and less than or equal to 1')
@@ -582,7 +618,7 @@ class Slide:
         for address in self.iterateTiles():
             if extractTissueTilesOnly:
                 if 'tissueLevel' not in self.tileDictionary[address]:
-                    raise ValueError('Deep tissue detection must be performed before extractTissueTilesOnly can be set to True')
+                    raise ValueError('Deep tissue detection must be performed with detectTissue() before extractTissueTilesOnly can be set to True')
                 if self.tileDictionary[address]['tissueLevel'] >= tissueLevelThreshold: # do not extract background and artifact tiles
                     overlapsAnnotation = False
                     for annotationClass in annotationClasses:
@@ -634,3 +670,52 @@ class Slide:
             area = self.getTile(tl)
             area.write_to_file(os.path.join(extractionDirectory, id, unannotatedClassName,
                 id+'_'+unannotatedClassName+'_'+str(self.tileDictionary[tl]['x'])+'x_'+str(self.tileDictionary[tl]['y'])+'y'+'_'+str(self.tileDictionary[tl]['height'])+'tilesize.jpg'), Q=100)
+
+
+    # ADAM EXPERIMENTAL
+    def detectTissue(self, tissueDetectionLevel=1, tissueDetectionTileSize=512, tissueDetectionTileOverlap=0, tissueDetectionUpsampleFactor=4, batchSize=20, overwriteExistingTissueDetection=False):
+        if not hasattr(self, 'tileDictionary'):
+            raise PermissionError(
+                'setTileProperties must be called before applying tissue detector')
+        if hasattr(self, 'rawTissueDetectionMap') and (not overwriteExistingTissueDetection):
+            raise Warning('Tissue detection has already been performed. Use overwriteExistingTissueDetection if you wish to write over it')
+
+        print("Detecting tissue of "+self.slideFilePath)
+        tissueForegroundSlide = Slide(self.slideFilePath, level=tissueDetectionLevel).setTileProperties(tileSize=tissueDetectionTileSize, tileOverlap=tissueDetectionTileOverlap) # tile size and overlap for tissue detector, not final tiles
+        tmpProcessor = Processor(tissueForegroundSlide)
+        tissueForegroundTmp = tmpProcessor.applyModel(tissueDetector(), batch_size=batchSize, predictionKey='tissue_detector').adoptKeyFromTileDictionary(upsampleFactor=tissueDetectionUpsampleFactor)
+
+        predictionMap = np.zeros([tissueForegroundTmp.numTilesInY, tissueForegroundTmp.numTilesInX,3])
+        for address in tissueForegroundTmp.iterateTiles():
+            if 'tissue_detector' in tissueForegroundTmp.tileDictionary[address]:
+                predictionMap[address[1], address[0], :] = tissueForegroundTmp.tileDictionary[address]['tissue_detector']
+
+        predictionMap2 = np.zeros([self.numTilesInY, self.numTilesInX])
+        predictionMap1res = resize(predictionMap, predictionMap2.shape, order=0, anti_aliasing=False)
+
+        self.rawTissueDetectionMap = predictionMap
+        self.resizedTissueDetectionMap = predictionMap1res
+
+        for address in self.iterateTiles():
+            self.tileDictionary[address].update({'artifactLevel': predictionMap1res[address[1], address[0]][0]})
+            self.tileDictionary[address].update({'backgroundLevel': predictionMap1res[address[1], address[0]][1]})
+            self.tileDictionary[address].update({'tissueLevel': predictionMap1res[address[1], address[0]][2]})
+
+    # ADAM EXPERIMENTAL
+    def plotResizedTissueDetectionMap(self, fileName=False, folder=os.getcwd()):
+        if not hasattr(self, 'tileDictionary'):
+            raise PermissionError('setTileProperties must be called before saving self')
+        if not hasattr(self, 'rawTissueDetectionMap'):
+            raise PermissionError('detectTissue must be called before getting resized tissue detection map')
+
+        # get case ID
+        if fileName:
+            if type(fileName) == str:
+                id = fileName
+            else:
+                raise ValueError('fileName must be a string')
+        else:
+            id = self.slideFileName
+
+        map = resize(self.rawTissueDetectionMap, np.zeros([self.numTilesInY, self.numTilesInX]).shape, order=0, anti_aliasing=False)
+        plt.imsave(os.path.join(folder, id+'.png'), map)
