@@ -523,7 +523,10 @@ class Slide:
                         if verbose: print("mask polygon: ", mask_polygon)
                         ImageDraw.Draw(mask).polygon(mask_polygon, outline=fillPixelValue, fill=fillPixelValue)
                     else:
-                        print(intersec.geom_type+' intersection found. Skipping it...')
+                        if verbose:
+                            print(intersec.geom_type+' intersection found. Skipping it...')
+                        else:
+                            pass
 
 
             # Non-polygonal intersection (should never happen)
