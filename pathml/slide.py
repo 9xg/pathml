@@ -3,6 +3,7 @@
 
 import numpy as np
 import pyvips as pv
+from PIL import Image, ImageDraw
 from joblib import Parallel, delayed
 from skimage.transform import downscale_local_mean
 from skimage.filters import threshold_triangle, threshold_otsu
@@ -74,6 +75,8 @@ class Slide:
             self.tileDictionary = contents['tileDictionary']
             if "rawTissueDetectionMap" in contents:
                 self.rawTissueDetectionMap = contents['rawTissueDetectionMap']
+            if 'annotationClassMultiPolygons' in contents:
+                self.annotationClassMultiPolygons = contents['annotationClassMultiPolygons']
         else: # initing from WSI file (from scratch)
             self.slideFilePath = slideFilePath
         self.slideFileName = Path(self.slideFilePath).stem
@@ -204,6 +207,9 @@ class Slide:
         return True
 
     def getTile(self, tileAddress, writeToNumpy=False, useFetch=False):
+        """
+        Returns a pyvips Region or, if writeToNumpy is set to true, a numpy array
+        """
         if not hasattr(self, 'tileDictionary'):
             raise PermissionError(
                 'setTileProperties must be called before accessing tiles')
@@ -446,11 +452,98 @@ class Slide:
 
         self.annotationClassMultiPolygons = classMultiPolys
 
+
+    # SEGMENTATION
     # ADAM EXPERIMENTAL
-    def extractAnnotationTiles(self, extractionDirectory, numTilesToExtractPerClass='all', tileDirName=False, classesToExtract='all', tileAnnotationOverlapThreshold=0.5, extractForegroundTilesOnly=False, extractTissueTilesOnly=False, tissueLevelThreshold=0.5, seed=False):
+    def getAnnotationTileMask(self, tileAddress, maskClass, verbose=False):
+        """
+        Returns a PIL image
+        """
+
+        if not hasattr(self, 'tileDictionary'):
+            raise PermissionError('setTileProperties must be called before extracting tiles')
+        if not hasattr(self, 'annotationClassMultiPolygons'):
+            raise PermissionError('addAnnotations must be called before extracting tiles')
+        if tileAddress not in self.tileDictionary:
+            raise ValueError('tileAddress must be in tileDictionary')
+        if maskClass not in self.annotationClassMultiPolygons:
+            raise ValueError(maskClass+' not in annotationClassMultiPolygons')
+
+        slideHeight = int(self.slideProperties['height'])
+        x = self.tileDictionary[tileAddress]['x']
+        y = self.tileDictionary[tileAddress]['y']
+        height = self.tileDictionary[tileAddress]['height']
+        tileBox = geometry.box(x, (slideHeight-y)-height, x+height, slideHeight-y)
+
+        mask = Image.new('1', (height, height), 0)
+
+        if verbose: print(self.tileDictionary[tileAddress]['x'], self.tileDictionary[tileAddress]['y'])
+
+        if self.annotationClassMultiPolygons[maskClass].geom_type == 'Polygon':
+            mask = self._getTileMask(tileBox, self.annotationClassMultiPolygons[maskClass], mask)
+        elif self.annotationClassMultiPolygons[maskClass].geom_type == 'MultiPolygon':
+            plygns = list(self.annotationClassMultiPolygons[maskClass])
+            for plygn in plygns:
+                mask = self._getTileMask(tileBox, plygn, mask)
+        else:
+            raise Warning('The value at key '+maskClass+' in annotationClassMultiPolygons must be Shapely Polygon or MultiPolygon')
+
+        return mask.transpose(Image.FLIP_TOP_BOTTOM)
+
+    # Adds overlap from one annotation to existing mask
+    def _getTileMask(self, tile_box, single_annotation, mask, fillPixelValue=1, verbose=False):
+
+        if verbose: print("- - - - - - - Checking overlap with annotation", list(single_annotation.exterior.coords), "- - - - - - - -")
+        box_coords = list(tile_box.exterior.coords)
+        bottom_left_point_of_tile = box_coords[3] # this point is always the bottom left corners
+
+        intersection = tile_box.intersection(single_annotation)
+
+        if intersection.area > 0:
+            if verbose: print("intersection area: ", intersection.area)
+
+            # Single polygon intersection
+            if intersection.geom_type == 'Polygon':
+                if verbose: print("number of polygons comprising intersection: 1")
+                mask_polygon = []
+                for point in list(intersection.exterior.coords):
+                    mask_polygon.append((point[0]-bottom_left_point_of_tile[0], point[1]-bottom_left_point_of_tile[1]))
+                if verbose: print("mask polygon: ", mask_polygon)
+                ImageDraw.Draw(mask).polygon(mask_polygon, outline=fillPixelValue, fill=fillPixelValue)
+
+            # Multi-polygon intersection
+            elif intersection.geom_type in ['MultiPolygon', 'GeometryCollection']:
+                intersecs = list(intersection)
+                if verbose: print("number of geometry elements comprising intersection: ", len(intersecs))
+                for intersec in intersecs:
+                    if intersec.geom_type == 'Polygon':
+                        mask_polygon = []
+                        for point in list(intersec.exterior.coords):
+                            mask_polygon.append((point[0]-bottom_left_point_of_tile[0], point[1]-bottom_left_point_of_tile[1]))
+                        if verbose: print("mask polygon: ", mask_polygon)
+                        ImageDraw.Draw(mask).polygon(mask_polygon, outline=fillPixelValue, fill=fillPixelValue)
+                    else:
+                        print(intersec.geom_type+' intersection found. Skipping it...')
+
+
+            # Non-polygonal intersection (should never happen)
+            #elif intersection.geom_type == 'GeometryCollection':
+            #    intersecs = list(intersection)
+            #    if verbose: print("number of geometry elements comprising intersection: ", len(intersecs))
+            #    for intersec in intersecs:
+
+            else:
+                raise Warning('Intersection type unknown: '+intersection.geom_type)
+
+        if verbose: print("\n")
+        return mask
+
+
+    # ADAM EXPERIMENTAL
+    def extractAnnotationTiles(self, pathToTileDir, tileDirName=False, numTilesToExtractPerClass='all', classesToExtract='all', extractSegmentationMasks=False, tileAnnotationOverlapThreshold=0.5, extractForegroundTilesOnly=False, extractTissueTilesOnly=False, tissueLevelThreshold=0.5, seed=False):
         """
         Extract tiles that overlap with annotations into directory structure amenable to torch.utils.data.ConcatDataset
-        extractionDirectory is expected to be of the form: '/path/to/tiles'
+        pathToTileDir is expected to be of the form: '/path/to/tiles'
         numTilesToExtractPerClass is expected to be positive integer, a dictionary with class names as keys and positive integers as values, or 'all' to extract all suitable tiles for each class
         classesToExtract is expected to be 'all' or a list
         tileAnnotationOverlapThreshold is expected to be a number greater than 0 and less than or equal to 1, or a dictionary of such values, with a key for each class to extract
@@ -530,9 +623,6 @@ class Slide:
                     for extractionClass in extractionClasses:
                         if self.tileDictionary[address][extractionClass+'Overlap'] >= annotationOverlapThresholdDict[extractionClass]:
                             annotatedTileAddresses[extractionClass].append(address)
-                            #area = self.getTile(address)
-                            #area.write_to_file(os.path.join(extractionDirectory, id, extractionClass,
-                            #    id+'_'+extractionClass+'_'+str(self.tileDictionary[address]['x'])+'x_'+str(self.tileDictionary[address]['y'])+'y'+'_'+str(self.tileDictionary[address]['height'])+'tilesize.jpg'), Q=100)
 
             elif extractForegroundTilesOnly:
                 if 'foreground' not in self.tileDictionary[address]:
@@ -541,17 +631,11 @@ class Slide:
                     for extractionClass in extractionClasses:
                         if self.tileDictionary[address][extractionClass+'Overlap'] >= annotationOverlapThresholdDict[extractionClass]:
                             annotatedTileAddresses[extractionClass].append(address)
-                            #area = self.getTile(address)
-                            #area.write_to_file(os.path.join(extractionDirectory, id, extractionClass,
-                            #    id+'_'+extractionClass+'_'+str(self.tileDictionary[address]['x'])+'x_'+str(self.tileDictionary[address]['y'])+'y'+'_'+str(self.tileDictionary[address]['height'])+'tilesize.jpg'), Q=100)
 
             else:
                 for extractionClass in extractionClasses:
                     if self.tileDictionary[address][extractionClass+'Overlap'] >= annotationOverlapThresholdDict[extractionClass]:
                         annotatedTileAddresses[extractionClass].append(address)
-                        #area = self.getTile(address)
-                        #area.write_to_file(os.path.join(extractionDirectory, id, extractionClass,
-                        #    id+'_'+extractionClass+'_'+str(self.tileDictionary[address]['x'])+'x_'+str(self.tileDictionary[address]['y'])+'y'+'_'+str(self.tileDictionary[address]['height'])+'tilesize.jpg'), Q=100)
 
         annotatedTilesToExtract = {} #{extractionClass: [] for extractionClass in extractionClasses}
         if type(numTilesToExtractPerClass) == int:
@@ -598,17 +682,24 @@ class Slide:
         # Create empty class tile directories
         for extractionClass in extractionClasses:
             try:
-                os.makedirs(os.path.join(extractionDirectory, id, extractionClass), exist_ok=True)
+                os.makedirs(os.path.join(pathToTileDir, id, extractionClass), exist_ok=True)
             except:
-                raise ValueError(os.path.join(extractionDirectory, id, extractionClass)+' is not a valid path')
+                raise ValueError(os.path.join(pathToTileDir, id, extractionClass)+' is not a valid path')
 
         # Extract tiles
         for ec,tte in annotatedTilesToExtract.items():
-            print("Extracting "+str(len(tte))+" of "+str(len(annotatedTileAddresses[ec]))+" "+ec+" tiles...")
+            if extractSegmentationMasks:
+                print("Extracting "+str(len(tte))+" of "+str(len(annotatedTileAddresses[ec]))+" "+ec+" tiles and segmentation masks...")
+            else:
+                print("Extracting "+str(len(tte))+" of "+str(len(annotatedTileAddresses[ec]))+" "+ec+" tiles...")
             for tl in tte:
                 area = self.getTile(tl)
-                area.write_to_file(os.path.join(extractionDirectory, id, ec,
+                area.write_to_file(os.path.join(pathToTileDir, id, ec,
                     id+'_'+ec+'_'+str(self.tileDictionary[tl]['x'])+'x_'+str(self.tileDictionary[tl]['y'])+'y'+'_'+str(self.tileDictionary[tl]['height'])+'tilesize.jpg'), Q=100)
+                if extractSegmentationMasks:
+                    mask = self.getAnnotationTileMask(tl, ec)
+                    mask.save(os.path.join(pathToTileDir, id, ec,
+                        id+'_'+ec+'_'+str(self.tileDictionary[tl]['x'])+'x_'+str(self.tileDictionary[tl]['y'])+'y'+'_'+str(self.tileDictionary[tl]['height'])+'tilesize_mask.gif'))
 
 
 
@@ -620,10 +711,11 @@ class Slide:
             # automatically detect whether it is an asap xml or qupath geojson (and if not throw error)
 
     # ADAM EXPERIMENTAL
-    def extractRandomUnannotatedTiles(self, extractionDirectory, numTilesToExtract=50, unannotatedClassName='unannotated', tileDirName=False, extractForegroundTilesOnly=False, extractTissueTilesOnly=False, tissueLevelThreshold=0.5, seed=False):
+    def extractRandomUnannotatedTiles(self, pathToTileDir, tileDirName=False, numTilesToExtract=50, unannotatedClassName='unannotated', extractSegmentationMasks=False, extractForegroundTilesOnly=False, extractTissueTilesOnly=False, tissueLevelThreshold=0.5, seed=False):
         """
         Extract randomly selected tiles that don't overlap any annotations into directory structure amenable to torch.utils.data.ConcatDataset
-        extractionDirectory is expected to be of the form: '/path/to/tiles'
+        pathToTileDir is expected to be of the form: '/path/to/tiles'
+        Note: all segmentation masks extracted for this class will obviously be blank
         """
 
         if not hasattr(self, 'tileDictionary'):
@@ -712,18 +804,28 @@ class Slide:
 
         # Create empty class tile directory
         try:
-            os.makedirs(os.path.join(extractionDirectory, id, unannotatedClassName), exist_ok=True)
+            os.makedirs(os.path.join(pathToTileDir, id, unannotatedClassName), exist_ok=True)
         except:
-            raise ValueError(os.path.join(extractionDirectory, id, unannotatedClassName)+' is not a valid path')
+            raise ValueError(os.path.join(pathToTileDir, id, unannotatedClassName)+' is not a valid path')
 
         # Extract the desired number of unannotated tiles
-        print("Extracting "+str(len(unannotatedTilesToExtract))+" of "+str(len(unannotatedTileAddresses))+" "+unannotatedClassName+" tiles...")
+
+        if extractSegmentationMasks:
+            print("Extracting "+str(len(unannotatedTilesToExtract))+" of "+str(len(unannotatedTileAddresses))+" "+unannotatedClassName+" tiles and segmentation masks...")
+        else:
+            print("Extracting "+str(len(unannotatedTilesToExtract))+" of "+str(len(unannotatedTileAddresses))+" "+unannotatedClassName+" tiles...")
         #print("Tiles to extract:", unannotatedTilesToExtract)
         for tl in unannotatedTilesToExtract:
             #print("On tile:", tl)
             area = self.getTile(tl)
-            area.write_to_file(os.path.join(extractionDirectory, id, unannotatedClassName,
+            area.write_to_file(os.path.join(pathToTileDir, id, unannotatedClassName,
                 id+'_'+unannotatedClassName+'_'+str(self.tileDictionary[tl]['x'])+'x_'+str(self.tileDictionary[tl]['y'])+'y'+'_'+str(self.tileDictionary[tl]['height'])+'tilesize.jpg'), Q=100)
+            if extractSegmentationMasks:
+                height = self.tileDictionary[tl]['height']
+                mask = Image.new('1', (height, height), 0) # blank mask
+                mask.save(os.path.join(pathToTileDir, id, unannotatedClassName,
+                    id+'_'+unannotatedClassName+'_'+str(self.tileDictionary[tl]['x'])+'x_'+str(self.tileDictionary[tl]['y'])+'y'+'_'+str(self.tileDictionary[tl]['height'])+'tilesize_mask.jpg'))
+
 
 
     # ADAM EXPERIMENTAL
