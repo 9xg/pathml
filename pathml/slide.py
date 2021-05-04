@@ -270,9 +270,15 @@ class Slide:
             id = self.slideFileName
 
         if hasattr(self, 'rawTissueDetectionMap'):
-            outputDict = {'slideFilePath': self.slideFilePath, 'tileDictionary': self.tileDictionary, 'rawTissueDetectionMap': self.rawTissueDetectionMap}
+            if hasattr(self, 'annotationClassMultiPolygons'):
+                outputDict = {'slideFilePath': self.slideFilePath, 'tileDictionary': self.tileDictionary, 'rawTissueDetectionMap': self.rawTissueDetectionMap, 'annotationClassMultiPolygons': self.annotationClassMultiPolygons}
+            else:
+                outputDict = {'slideFilePath': self.slideFilePath, 'tileDictionary': self.tileDictionary, 'rawTissueDetectionMap': self.rawTissueDetectionMap}
         else:
-            outputDict = {'slideFilePath': self.slideFilePath, 'tileDictionary': self.tileDictionary}
+            if hasattr(self, 'annotationClassMultiPolygons'):
+                outputDict = {'slideFilePath': self.slideFilePath, 'tileDictionary': self.tileDictionary, 'annotationClassMultiPolygons': self.annotationClassMultiPolygons}
+            else:
+                outputDict = {'slideFilePath': self.slideFilePath, 'tileDictionary': self.tileDictionary}
 
         pickle.dump(outputDict, open(os.path.join(folder, id)+'.pml', 'wb'))
 
@@ -311,11 +317,12 @@ class Slide:
             return len(self.tileDictionary)
 
     # ADAM EXPERIMENTAL
-    def addAnnotations(self, annotationFilePath, classesToAdd='all', magnificationLevel=0, overwriteExistingAnnotations=False):
+    def addAnnotations(self, annotationFilePath, classesToAdd=False, negativeClass=False, magnificationLevel=0, overwriteExistingAnnotations=False):
         """
         Adds the overlap between all (desired) classes present in an annotation file and each tile in the tile dictionary
         Annotations within groups in ASAP are taken to be within one class, where the name of the group is the name of the class
         annotationFilePath must point to either an xml file from the ASAP software or a GeoJSON file from the QuPath software
+        classesToAdd is a list of classes to add from the annotation file. If not specified, all annotation classes will be used (except the negativeClass if one is specified)
         negativeClass is the name of the class of negative annotations (donut holes) to subtract from the other annotations
         """
 
@@ -326,9 +333,10 @@ class Slide:
         if not hasattr(self, 'tileDictionary'):
             raise PermissionError(
                 'setTileProperties must be called before adding annotations')
+
         foundOverlap = False
         for k in self.tileDictionary[list(self.tileDictionary.keys())[0]]:
-            if if 'Overlap' in k:
+            if 'Overlap' in k:
                 foundOverlap = True
                 if not overwriteExistingAnnotations:
                     raise Warning('Annotatons have already been added to the tile dictionary. Use overwriteExistingAnnotations if you wish to write over them')
@@ -342,8 +350,8 @@ class Slide:
             raise ValueError('magnificationLevel must be an integer 0 or greater')
         if 'openslide.level['+str(magnificationLevel)+'].downsample' not in self.slideProperties:
             raise ValueError('magnificationLevel not present in slide')
-        if (classesToAdd != 'all') and (not isinstance(classesToAdd, list)):
-            raise ValueError("classestoAdd must be 'all' or a list")
+        if (classesToAdd) and (not isinstance(classesToAdd, list)):
+            raise ValueError("classestoAdd must a list")
         if not os.path.isfile(annotationFilePath):
             raise FileNotFoundError('Annotation file could not be loaded')
 
@@ -355,7 +363,7 @@ class Slide:
             else:
                 fileType = 'qupath_geojson'
 
-        class_multipolys = {}
+        classMultiPolys = {}
 
         # Turn ASAP xml annotations into a dict of multipolygons, with one multipolygon for each class
         if fileType == 'asap_xml':
@@ -375,14 +383,18 @@ class Slide:
             print("Scale: "+str(annotationScalingFactor))
 
             # Iterate over all annotations to collect annotations in the same class
-            class_polys = {}
+            classPolys = {}
+            negativePolys = []
             for annotation in allAnnotations:
-                annotation_class = annotation.attrib['PartOfGroup']
-                if (classesToAdd != 'all') and (annotation_class not in classesToAdd):
+
+                annotationClass = annotation.attrib['PartOfGroup']
+
+                if (classesToAdd) and (annotationClass not in classesToAdd):
                     continue # skip annotations from classes not in the classesToAdd list
 
-                if annotation_class not in class_polys:
-                    class_polys[annotation_class] = []
+                if annotationClass not in classPolys:
+                    if annotationClass != negativeClass:
+                        classPolys[annotationClass] = []
 
                 annotationTree = annotation.find('Coordinates')
                 polygon = []
@@ -392,10 +404,30 @@ class Slide:
                 polygonNp = np.asarray(polygon)
                 polygonNp[:,1] = slideHeight-polygonNp[:,1]
                 poly = geometry.Polygon(polygonNp).buffer(0)
-                class_polys[annotation_class].append(poly)
+
+                if (negativeClass) and (annotationClass == negativeClass):
+                    negativePolys.append(poly)
+                else:
+                    classPolys[annotationClass].append(poly)
 
             # Make a Shapely MultiPolygon for each class
-            class_multipolys = {ancl:geometry.MultiPolygon(ply) for (ancl,ply) in class_polys.items()}
+            classMultiPolys = {ancl:geometry.MultiPolygon(ply) for (ancl,ply) in classPolys.items()}
+
+            if (negativeClass) and len(negativePolys) == 0:
+                print('Warning: 0 '+negativeClass+' annotations found')
+            elif (negativeClass):
+                print(str(len(negativePolys))+' '+negativeClass+' annotations found')
+
+            # Remove negativeClass polygons from each class multipolygon
+            for ancl in classMultiPolys:
+                for nply in negativePolys:
+                    if classMultiPolys[ancl].intersects(nply):
+                        #print('Found intersection')
+                        #print('Multipolygon area before:', classMultiPolys[ancl].area)
+                        #print('Multipolygon area after:', classMultiPolys[ancl].difference(nply).area)
+                        #classMultiPolys[ancl] = mply.difference(nply)
+                        classMultiPolys[ancl] = classMultiPolys[ancl].difference(nply)
+
 
         # Turn QuPath GeoJSON annotations into a dict of multipolygons, with one multipolygon for each class
         else:
@@ -408,9 +440,11 @@ class Slide:
             height = self.tileDictionary[address]['height']
             tile = geometry.box(x, (slideHeight-y)-height, x+height, slideHeight-y)
 
-            for class_name, class_multipoly in class_multipolys.items():
+            for class_name, class_multipoly in classMultiPolys.items():
                 tile_class_overlap = tile.intersection(class_multipoly).area/(height**2)
                 self.tileDictionary[address].update({class_name+'Overlap': tile_class_overlap})
+
+        self.annotationClassMultiPolygons = classMultiPolys
 
     # ADAM EXPERIMENTAL
     def extractAnnotationTiles(self, extractionDirectory, numTilesToExtractPerClass='all', tileDirName=False, classesToExtract='all', tileAnnotationOverlapThreshold=0.5, extractForegroundTilesOnly=False, extractTissueTilesOnly=False, tissueLevelThreshold=0.5, seed=False):
@@ -425,6 +459,10 @@ class Slide:
         if not hasattr(self, 'tileDictionary'):
             raise PermissionError(
                 'setTileProperties must be called before extracting tiles')
+
+        if not hasattr(self, 'annotationClassMultiPolygons'):
+            raise PermissionError(
+                'addAnnotations must be called before extracting tiles')
 
         if extractForegroundTilesOnly and extractTissueTilesOnly:
             raise ValueError('Only one of extractTissueTilesOnly and extractForegroundTilesOnly can be set to True, not both')
@@ -523,8 +561,10 @@ class Slide:
                 if len(annotatedTileAddresses[extractionClass]) == 0:
                     raise Warning('0 suitable '+extractionClass+' tiles found')
                 if len(annotatedTileAddresses[extractionClass]) < numTilesToExtractPerClass:
-                    print('Warning: '+str(len(annotatedTileAddresses[extractionClass]))+' suitable '+extractionClass+' tiles found but requested '+str(numTilesToExtractPerClass)+' tiles to extract. Extracting tiles found...')
-                annotatedTilesToExtract[extractionClass] = random.sample(annotatedTileAddresses[extractionClass], numTilesToExtractPerClass)
+                    print('Warning: '+str(len(annotatedTileAddresses[extractionClass]))+' suitable '+extractionClass+' tiles found but requested '+str(numTilesToExtractPerClass)+' tiles to extract. Extracting all suitable tiles...')
+                    annotatedTilesToExtract[extractionClass] = annotatedTileAddresses[extractionClass]
+                else:
+                    annotatedTilesToExtract[extractionClass] = random.sample(annotatedTileAddresses[extractionClass], numTilesToExtractPerClass)
             #annotatedTilesToExtract = {extractionClass: random.sample(annotatedTileAddresses[extractionClass], numTilesToExtractPerClass) for extractionClass in extractionClasses}
         elif numTilesToExtractPerClass == 'all':
             for extractionClass in extractionClasses:
@@ -547,8 +587,10 @@ class Slide:
                 if (type(numTiles) != int) or (numTiles <= 0):
                     raise ValueError(extractionClass+' does not have a positive integer set as its value in the numTilesToExtractPerClass dictionary')
                 if len(annotatedTileAddresses[extractionClass]) < numTiles:
-                    raise Warning(str(len(annotatedTileAddresses[extractionClass]))+' suitable '+extractionClass+' tiles found but requested '+str(numTiles)+' tiles to extract')
-                annotatedTilesToExtract[extractionClass] = random.sample(annotatedTileAddresses[extractionClass], numTiles)
+                    print('Warning: '+str(len(annotatedTileAddresses[extractionClass]))+' suitable '+extractionClass+' tiles found but requested '+str(numTiles)+' tiles to extract. Extracting all suitable tiles...')
+                    annotatedTilesToExtract[extractionClass] = annotatedTileAddresses[extractionClass]
+                else:
+                    annotatedTilesToExtract[extractionClass] = random.sample(annotatedTileAddresses[extractionClass], numTiles)
 
         else:
             raise ValueError("numTilesToExtractPerClass must be a positive integer, a dictionary, or 'all'")
@@ -562,7 +604,7 @@ class Slide:
 
         # Extract tiles
         for ec,tte in annotatedTilesToExtract.items():
-            print("Extracting "+str(len(tte))+" "+ec+" tiles...")
+            print("Extracting "+str(len(tte))+" of "+str(len(annotatedTileAddresses[ec]))+" "+ec+" tiles...")
             for tl in tte:
                 area = self.getTile(tl)
                 area.write_to_file(os.path.join(extractionDirectory, id, ec,
@@ -587,6 +629,10 @@ class Slide:
         if not hasattr(self, 'tileDictionary'):
             raise PermissionError(
                 'setTileProperties must be called before extracting tiles')
+
+        if not hasattr(self, 'annotationClassMultiPolygons'):
+            raise PermissionError(
+                'addAnnotations must be called before extracting tiles')
 
         if extractForegroundTilesOnly and extractTissueTilesOnly:
             raise ValueError('Only one of extractTissueTilesOnly and extractForegroundTilesOnly can be set to True, not both')
@@ -658,8 +704,11 @@ class Slide:
         if len(unannotatedTileAddresses) == 0:
             raise Warning('0 unannotated tiles found')
         if len(unannotatedTileAddresses) < numTilesToExtract:
-            raise Warning(str(len(unannotatedTileAddresses))+' unannotated tiles found but requested '+str(numTilesToExtract)+' tiles to extract')
-        print(str(len(unannotatedTileAddresses))+' unannotated tiles found in total')
+            print('Warning: '+str(len(unannotatedTileAddresses))+' unannotated tiles found but requested '+str(numTilesToExtract)+' tiles to extract. Extracting all suitable tiles...')
+            unannotatedTilesToExtract = unannotatedTileAddresses
+        else:
+            unannotatedTilesToExtract = random.sample(unannotatedTileAddresses, numTilesToExtract)
+            #print(str(len(unannotatedTileAddresses))+' unannotated tiles found in total')
 
         # Create empty class tile directory
         try:
@@ -668,8 +717,7 @@ class Slide:
             raise ValueError(os.path.join(extractionDirectory, id, unannotatedClassName)+' is not a valid path')
 
         # Extract the desired number of unannotated tiles
-        unannotatedTilesToExtract = random.sample(unannotatedTileAddresses, numTilesToExtract)
-        print("Extracting "+str(len(unannotatedTilesToExtract))+" "+unannotatedClassName+" tiles...")
+        print("Extracting "+str(len(unannotatedTilesToExtract))+" of "+str(len(unannotatedTileAddresses))+" "+unannotatedClassName+" tiles...")
         #print("Tiles to extract:", unannotatedTilesToExtract)
         for tl in unannotatedTilesToExtract:
             #print("On tile:", tl)
