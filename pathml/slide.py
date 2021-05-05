@@ -19,6 +19,7 @@ import xml.etree.ElementTree as ET
 from shapely import geometry
 from tqdm import tqdm
 import random
+import json
 import os
 import pickle
 pv.cache_set_max(0)
@@ -369,7 +370,13 @@ class Slide:
             else:
                 fileType = 'qupath_geojson'
 
+        slideHeight = int(self.slideProperties['height'])
+        annotationScalingFactor = float(self.slideProperties['openslide.level[0].downsample'])/float(self.slideProperties['openslide.level['+str(magnificationLevel)+'].downsample'])
+        print("Scale: "+str(annotationScalingFactor))
+
         classMultiPolys = {}
+        classPolys = {}
+        negativePolys = []
 
         # Turn ASAP xml annotations into a dict of multipolygons, with one multipolygon for each class
         if fileType == 'asap_xml':
@@ -384,22 +391,24 @@ class Slide:
             allAnnotations = root.find('Annotations') # Find all annotations for this slide
             print('xml file valid - ' + str(len(allAnnotations)) + ' annotations found.') # Display number of found annotations
 
-            slideHeight = int(self.slideProperties['height'])
-            annotationScalingFactor = float(self.slideProperties['openslide.level[0].downsample'])/float(self.slideProperties['openslide.level['+str(magnificationLevel)+'].downsample'])
-            print("Scale: "+str(annotationScalingFactor))
-
             # Iterate over all annotations to collect annotations in the same class
-            classPolys = {}
-            negativePolys = []
+            #classPolys = {}
+            #negativePolys = []
             for annotation in allAnnotations:
 
                 annotationClass = annotation.attrib['PartOfGroup']
 
                 if (classesToAdd) and (annotationClass not in classesToAdd):
-                    continue # skip annotations from classes not in the classesToAdd list
+                    if (negativeClass):
+                        if (annotationClass != negativeClass):
+                            print("Skipping an annotation which doesn't appear in classesToAdd or in negativeClass")
+                            continue
+                    else:
+                        print("Skipping an annotation which doesn't appear in classesToAdd")
+                        continue
 
                 if annotationClass not in classPolys:
-                    if annotationClass != negativeClass:
+                    if (negativeClass) and (annotationClass != negativeClass):
                         classPolys[annotationClass] = []
 
                 annotationTree = annotation.find('Coordinates')
@@ -416,28 +425,69 @@ class Slide:
                 else:
                     classPolys[annotationClass].append(poly)
 
-            # Make a Shapely MultiPolygon for each class
-            classMultiPolys = {ancl:geometry.MultiPolygon(ply) for (ancl,ply) in classPolys.items()}
-
-            if (negativeClass) and len(negativePolys) == 0:
-                print('Warning: 0 '+negativeClass+' annotations found')
-            elif (negativeClass):
-                print(str(len(negativePolys))+' '+negativeClass+' annotations found')
-
-            # Remove negativeClass polygons from each class multipolygon
-            for ancl in classMultiPolys:
-                for nply in negativePolys:
-                    if classMultiPolys[ancl].intersects(nply):
-                        #print('Found intersection')
-                        #print('Multipolygon area before:', classMultiPolys[ancl].area)
-                        #print('Multipolygon area after:', classMultiPolys[ancl].difference(nply).area)
-                        #classMultiPolys[ancl] = mply.difference(nply)
-                        classMultiPolys[ancl] = classMultiPolys[ancl].difference(nply)
-
-
         # Turn QuPath GeoJSON annotations into a dict of multipolygons, with one multipolygon for each class
         else:
-            raise ValueError('QuPath GeoJSON files not yet supported')
+            with open(annotationFilePath) as f:
+                allAnnotations = json.load(f)
+            if not isinstance(allAnnotations, list):
+                raise Warning('GeoJSON file does not have an outer list structure')
+            else:
+                print('JSON file valid - ' + str(len(allAnnotations)) + ' annotations found.')
+
+            for annotation in allAnnotations:
+                if annotation['geometry']['type'] != 'Polygon':
+                    raise ValueError('Found annotation that was not a polygon in JSON file')
+
+                try:
+                    annotationClass = annotation['properties']['classification']['name']
+                except:
+                    raise ValueError('Found QuPath annotation without a class; all annotations must be assigned to a class')
+
+                if (classesToAdd) and (annotationClass not in classesToAdd):
+                    if (negativeClass):
+                        if (annotationClass != negativeClass):
+                            print("Skipping an annotation which doesn't appear in classesToAdd or in negativeClass")
+                            continue
+                    else:
+                        print("Skipping an annotation which doesn't appear in classesToAdd")
+                        continue
+
+                if annotationClass not in classPolys:
+                    if (negativeClass) and (annotationClass != negativeClass):
+                        classPolys[annotationClass] = []
+
+                if len(annotation['geometry']['coordinates']) > 1:
+                    raise ValueError('Multiple sets of coordinates found for an annotation')
+                annotationCoordinates = annotation['geometry']['coordinates'][0]
+                polygon = []
+                for coordinate in annotationCoordinates:
+                    x_coord = coordinate[0]
+                    y_coord = coordinate[1]
+                    polygon.append((float(x_coord)*annotationScalingFactor, float(y_coord)*annotationScalingFactor))
+                polygonNp = np.asarray(polygon)
+                polygonNp[:,1] = slideHeight-polygonNp[:,1]
+                poly = geometry.Polygon(polygonNp).buffer(0)
+
+                if (negativeClass) and (annotationClass == negativeClass):
+                    negativePolys.append(poly)
+                else:
+                    classPolys[annotationClass].append(poly)
+
+
+        # Make a Shapely MultiPolygon for each class
+        classMultiPolys = {ancl:geometry.MultiPolygon(ply) for (ancl,ply) in classPolys.items()}
+
+        if (negativeClass) and (len(negativePolys) == 0):
+            print('Warning: 0 '+negativeClass+' annotations found')
+        elif (negativeClass):
+            print(str(len(negativePolys))+' '+negativeClass+' annotations found')
+
+        # Remove negativeClass polygons from each class multipolygon
+        for ancl in classMultiPolys:
+            for nply in negativePolys:
+                if classMultiPolys[ancl].intersects(nply):
+                    classMultiPolys[ancl] = classMultiPolys[ancl].difference(nply)
+
 
         # Iterate over all tiles in tile dictionary, marking the overlap of each class MultiPolygon with each tile
         for address in self.iterateTiles():
