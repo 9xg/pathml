@@ -17,6 +17,7 @@ from pathml.processor import Processor
 from pathml.models.tissuedetector import tissueDetector
 import xml.etree.ElementTree as ET
 from shapely import geometry
+from shapely.ops import unary_union
 from tqdm import tqdm
 import random
 import json
@@ -304,6 +305,12 @@ class Slide:
                                       shape=[self.lowMagSlide.height, self.lowMagSlide.width, self.lowMagSlide.bands])
         return self.lowMagSlide
 
+    def hasAnnotations(self):
+        return hasattr(self, 'annotationClassMultiPolygons')
+
+    def hasTissueDetection(self):
+        return hasattr(self, 'rawTissueDetectionMap')
+
 # TODO: a check tileaddress function
     def iterateTiles(self, tileDictionary=False, includeImage=False, writeToNumpy=False):
         tileDictionaryIterable = self.tileDictionary if not tileDictionary else tileDictionary
@@ -324,7 +331,7 @@ class Slide:
             return len(self.tileDictionary)
 
     # ADAM EXPERIMENTAL
-    def addAnnotations(self, annotationFilePath, classesToAdd=False, negativeClass=False, magnificationLevel=0, overwriteExistingAnnotations=False):
+    def addAnnotations(self, annotationFilePath, classesToAdd=False, negativeClass=False, magnificationLevel=0, overwriteExistingAnnotations=False, mergeOverlappingAnnotationsOfSameClass=True, acceptMultiPolygonAnnotations=False):
         """
         Adds the overlap between all (desired) classes present in an annotation file and each tile in the tile dictionary
         Annotations within groups in ASAP are taken to be within one class, where the name of the group is the name of the class
@@ -346,7 +353,7 @@ class Slide:
             if 'Overlap' in k:
                 foundOverlap = True
                 if not overwriteExistingAnnotations:
-                    raise Warning('Annotatons have already been added to the tile dictionary. Use overwriteExistingAnnotations if you wish to write over them')
+                    raise Warning('Annotations have already been added to the tile dictionary. Use overwriteExistingAnnotations if you wish to write over them')
         if foundOverlap:
             for address in self.iterateTiles():
                 for key in self.tileDictionary[address].copy():
@@ -389,7 +396,7 @@ class Slide:
                 raise ImportError('Annotation file is not an ASAP xml file')
 
             allAnnotations = root.find('Annotations') # Find all annotations for this slide
-            print('xml file valid - ' + str(len(allAnnotations)) + ' annotations found.') # Display number of found annotations
+            print('xml file valid - ' + str(len(allAnnotations)) + ' annotation(s) found.') # Display number of found annotations
 
             # Iterate over all annotations to collect annotations in the same class
             #classPolys = {}
@@ -418,12 +425,31 @@ class Slide:
                     polygon.append((float(info['X'])*annotationScalingFactor, float(info['Y'])*annotationScalingFactor))
                 polygonNp = np.asarray(polygon)
                 polygonNp[:,1] = slideHeight-polygonNp[:,1]
-                poly = geometry.Polygon(polygonNp).buffer(0)
+                try:
+                    poly = geometry.Polygon(polygonNp).buffer(0)
+                except:
+                    raise ValueError('Annotation cannot be made into polygon(s)')
+
+                # Make sure the annotation produced a polygon
+                if poly.geom_type != 'Polygon':
+                    if poly.geom_type == 'MultiPolygon':
+                        if not acceptMultiPolygonAnnotations:
+                            for i, compPoly in enumerate(list(poly)):
+                                print('Component polygon '+str(i+1)+' centroid / area: ('+str(compPoly.centroid.x)+', '+str(slideHeight-compPoly.centroid.y)+') / '+str(compPoly.area))
+                            raise ValueError('Annotation with centroid ('+str(poly.centroid.x)+', '+str(slideHeight-poly.centroid.y)+
+                                ') produces a Shapely '+poly.geom_type+' instead of a polygon; check to see if it self-intersects. See above for the centroids of the component Polygons of the MultiPolygon.')
+                    else:
+                        raise ValueError('Annotation with centroid ('+str(poly.centroid.x)+', '+str(slideHeight-poly.centroid.y)+
+                            ') produces a Shapely '+poly.geom_type+' instead of a polygon; check to see if it self-intersects.')
 
                 if (negativeClass) and (annotationClass == negativeClass):
                     negativePolys.append(poly)
                 else:
-                    classPolys[annotationClass].append(poly)
+                    if poly.geom_type == 'MultiPolygon':
+                        for componentPoly in list(poly):
+                            classPolys[annotationClass].append(componentPoly)
+                    else:
+                        classPolys[annotationClass].append(poly)
 
         # Turn QuPath GeoJSON annotations into a dict of multipolygons, with one multipolygon for each class
         else:
@@ -432,7 +458,7 @@ class Slide:
             if not isinstance(allAnnotations, list):
                 raise Warning('GeoJSON file does not have an outer list structure')
             else:
-                print('JSON file valid - ' + str(len(allAnnotations)) + ' annotations found.')
+                print('JSON file valid - ' + str(len(allAnnotations)) + ' annotation(s) found.')
 
             for annotation in allAnnotations:
                 if annotation['geometry']['type'] != 'Polygon':
@@ -466,27 +492,65 @@ class Slide:
                     polygon.append((float(x_coord)*annotationScalingFactor, float(y_coord)*annotationScalingFactor))
                 polygonNp = np.asarray(polygon)
                 polygonNp[:,1] = slideHeight-polygonNp[:,1]
-                poly = geometry.Polygon(polygonNp).buffer(0)
+                try:
+                    poly = geometry.Polygon(polygonNp).buffer(0)
+                except:
+                    raise ValueError('Annotation cannot be made into a polygon')
+
+                # Make sure the annotation produced a polygon
+                if poly.geom_type != 'Polygon':
+                    if poly.geom_type == 'MultiPolygon':
+                        if not acceptMultiPolygonAnnotations:
+                            for i, compPoly in enumerate(list(poly)):
+                                print('Component polygon '+str(i+1)+' centroid / area: ('+str(compPoly.centroid.x)+', '+str(slideHeight-compPoly.centroid.y)+') / '+str(compPoly.area))
+                            raise ValueError('Annotation with centroid ('+str(poly.centroid.x)+', '+str(slideHeight-poly.centroid.y)+
+                                ') produces a Shapely '+poly.geom_type+' instead of a polygon; check to see if it self-intersects. See above for the centroids of the component Polygons of the MultiPolygon.')
+                    else:
+                        raise ValueError('Annotation with centroid ('+str(poly.centroid.x)+', '+str(slideHeight-poly.centroid.y)+
+                            ') produces a Shapely '+poly.geom_type+' instead of a polygon; check to see if it self-intersects.')
 
                 if (negativeClass) and (annotationClass == negativeClass):
                     negativePolys.append(poly)
                 else:
-                    classPolys[annotationClass].append(poly)
+                    if poly.geom_type == 'MultiPolygon':
+                        for componentPoly in list(poly):
+                            classPolys[annotationClass].append(componentPoly)
+                    else:
+                        classPolys[annotationClass].append(poly)
 
 
         # Make a Shapely MultiPolygon for each class
-        classMultiPolys = {ancl:geometry.MultiPolygon(ply) for (ancl,ply) in classPolys.items()}
+        #classMultiPolys = {ancl:geometry.MultiPolygon(ply) for (ancl,ply) in classPolys.items()}
+        if mergeOverlappingAnnotationsOfSameClass:
+            classMultiPolys = {ancl:unary_union(ply_list) for (ancl,ply_list) in classPolys.items()}
+        else:
+            classMultiPolys = {ancl:geometry.MultiPolygon(ply) for (ancl,ply) in classPolys.items()}
+
+        # If desired, merge any polygons of the same class that overlap
+        #if mergeOverlappingAnnotationsOfSameClass:
+        #    for ancl, mply in classMultiPolys.items():
+        #        if mpl
 
         if (negativeClass) and (len(negativePolys) == 0):
-            print('Warning: 0 '+negativeClass+' annotations found')
+            print('Warning: 0 '+negativeClass+' annotations found, but negativeClass assigned a value')
         elif (negativeClass):
-            print(str(len(negativePolys))+' '+negativeClass+' annotations found')
+            print(str(len(negativePolys))+' '+negativeClass+' annotation(s) found')
 
         # Remove negativeClass polygons from each class multipolygon
         for ancl in classMultiPolys:
             for nply in negativePolys:
                 if classMultiPolys[ancl].intersects(nply):
                     classMultiPolys[ancl] = classMultiPolys[ancl].difference(nply)
+
+        # Check for overlapping annotations from different classes
+        for ancl1, ancl1multipoly in classMultiPolys.items():
+            for ancl2, ancl2multipoly in classMultiPolys.items():
+                if ancl1 != ancl2:
+                    if ancl1multipoly.overlaps(ancl2multipoly):
+                        clsIntersection = ancl1multipoly.intersection(ancl2multipoly)
+                        raise ValueError('Annotation classes '+ancl1multipoly+' and '+ancl2multipoly+' overlap near ('+str(clsIntersection.centroid.x)+', '+str(slideHeight-clsIntersection.centroid.y)+')')
+                else:
+                    continue
 
 
         # Iterate over all tiles in tile dictionary, marking the overlap of each class MultiPolygon with each tile
@@ -593,10 +657,10 @@ class Slide:
 
 
     # ADAM EXPERIMENTAL
-    def extractAnnotationTiles(self, pathToTileDir, tileDirName=False, numTilesToExtractPerClass='all', classesToExtract='all', extractSegmentationMasks=False, tileAnnotationOverlapThreshold=0.5, extractForegroundTilesOnly=False, extractTissueTilesOnly=False, tissueLevelThreshold=0.5, seed=False):
+    def extractAnnotationTiles(self, outputDir, tileDirName=False, numTilesToExtractPerClass='all', classesToExtract='all', extractSegmentationMasks=False, tileAnnotationOverlapThreshold=0.5, extractForegroundTilesOnly=False, extractTissueTilesOnly=False, tissueLevelThreshold=0.5, seed=False):
         """
         Extract tiles that overlap with annotations into directory structure amenable to torch.utils.data.ConcatDataset
-        pathToTileDir is expected to be of the form: '/path/to/tiles'
+        outputDir is expected to be of the form: '/path/to/tiles'
         numTilesToExtractPerClass is expected to be positive integer, a dictionary with class names as keys and positive integers as values, or 'all' to extract all suitable tiles for each class
         classesToExtract is expected to be 'all' or a list
         tileAnnotationOverlapThreshold is expected to be a number greater than 0 and less than or equal to 1, or a dictionary of such values, with a key for each class to extract
@@ -610,8 +674,8 @@ class Slide:
             raise PermissionError(
                 'addAnnotations must be called before extracting tiles')
 
-        if extractForegroundTilesOnly and extractTissueTilesOnly:
-            raise ValueError('Only one of extractTissueTilesOnly and extractForegroundTilesOnly can be set to True, not both')
+        #if extractForegroundTilesOnly and extractTissueTilesOnly:
+        #    raise ValueError('Only one of extractTissueTilesOnly and extractForegroundTilesOnly can be set to True, not both')
 
         if seed:
             if type(seed) != int:
@@ -669,7 +733,17 @@ class Slide:
         # Get tiles to extract
         annotatedTileAddresses = {extractionClass: [] for extractionClass in extractionClasses}
         for address in self.iterateTiles():
-            if extractTissueTilesOnly:
+            if extractTissueTilesOnly and extractForegroundTilesOnly:
+                if 'tissueLevel' not in self.tileDictionary[address]:
+                    raise ValueError('Deep tissue detection must be performed with detectTissue() before extractTissueTilesOnly can be set to True')
+                if 'foreground' not in self.tileDictionary[address]:
+                    raise ValueError('Foreground detection must be performed with detectForeground() before extractForegroundTilesOnly can be set to True')
+                if (self.tileDictionary[address]['tissueLevel'] >= tissueLevelThreshold) and (self.tileDictionary[address]['foreground']):
+                    for extractionClass in extractionClasses:
+                        if self.tileDictionary[address][extractionClass+'Overlap'] >= annotationOverlapThresholdDict[extractionClass]:
+                            annotatedTileAddresses[extractionClass].append(address)
+
+            elif extractTissueTilesOnly and not extractForegroundTilesOnly:
                 if 'tissueLevel' not in self.tileDictionary[address]:
                     raise ValueError('Deep tissue detection must be performed with detectTissue() before extractTissueTilesOnly can be set to True')
                 if self.tileDictionary[address]['tissueLevel'] >= tissueLevelThreshold: # do not extract background and artifact tiles
@@ -677,7 +751,7 @@ class Slide:
                         if self.tileDictionary[address][extractionClass+'Overlap'] >= annotationOverlapThresholdDict[extractionClass]:
                             annotatedTileAddresses[extractionClass].append(address)
 
-            elif extractForegroundTilesOnly:
+            elif extractForegroundTilesOnly and not extractTissueTilesOnly:
                 if 'foreground' not in self.tileDictionary[address]:
                     raise ValueError('Foreground detection must be performed with detectForeground() before extractForegroundTilesOnly can be set to True')
                 if self.tileDictionary[address]['foreground']:
@@ -732,12 +806,18 @@ class Slide:
         else:
             raise ValueError("numTilesToExtractPerClass must be a positive integer, a dictionary, or 'all'")
 
-        # Create empty class tile directories
-        for extractionClass in extractionClasses:
+        # Create empty class tile directory
+        try:
+            os.makedirs(os.path.join(outputDir, 'tiles', id, extractionClass), exist_ok=True)
+        except:
+            raise ValueError(os.path.join(outputDir, 'tiles', id, extractionClass)+' is not a valid path')
+
+        # Create empty class mask directory (if desired)
+        if extractSegmentationMasks:
             try:
-                os.makedirs(os.path.join(pathToTileDir, id, extractionClass), exist_ok=True)
+                os.makedirs(os.path.join(outputDir, 'masks', id, extractionClass), exist_ok=True)
             except:
-                raise ValueError(os.path.join(pathToTileDir, id, extractionClass)+' is not a valid path')
+                raise ValueError(os.path.join(outputDir, 'masks', id, extractionClass)+' is not a valid path')
 
         # Extract tiles
         for ec,tte in annotatedTilesToExtract.items():
@@ -747,11 +827,11 @@ class Slide:
                 print("Extracting "+str(len(tte))+" of "+str(len(annotatedTileAddresses[ec]))+" "+ec+" tiles...")
             for tl in tte:
                 area = self.getTile(tl)
-                area.write_to_file(os.path.join(pathToTileDir, id, ec,
+                area.write_to_file(os.path.join(outputDir, 'tiles', id, ec,
                     id+'_'+ec+'_'+str(self.tileDictionary[tl]['x'])+'x_'+str(self.tileDictionary[tl]['y'])+'y'+'_'+str(self.tileDictionary[tl]['height'])+'tilesize.jpg'), Q=100)
                 if extractSegmentationMasks:
                     mask = self.getAnnotationTileMask(tl, ec)
-                    mask.save(os.path.join(pathToTileDir, id, ec,
+                    mask.save(os.path.join(outputDir, 'masks', id, ec,
                         id+'_'+ec+'_'+str(self.tileDictionary[tl]['x'])+'x_'+str(self.tileDictionary[tl]['y'])+'y'+'_'+str(self.tileDictionary[tl]['height'])+'tilesize_mask.gif'))
 
 
@@ -764,20 +844,16 @@ class Slide:
             # automatically detect whether it is an asap xml or qupath geojson (and if not throw error)
 
     # ADAM EXPERIMENTAL
-    def extractRandomUnannotatedTiles(self, pathToTileDir, tileDirName=False, numTilesToExtract=50, unannotatedClassName='unannotated', extractSegmentationMasks=False, extractForegroundTilesOnly=False, extractTissueTilesOnly=False, tissueLevelThreshold=0.5, seed=False):
+    def extractRandomUnannotatedTiles(self, outputDir, tileDirName=False, numTilesToExtract=50, unannotatedClassName='unannotated', extractSegmentationMasks=False, extractForegroundTilesOnly=False, extractTissueTilesOnly=False, tissueLevelThreshold=0.5, seed=False):
         """
         Extract randomly selected tiles that don't overlap any annotations into directory structure amenable to torch.utils.data.ConcatDataset
-        pathToTileDir is expected to be of the form: '/path/to/tiles'
+        outputDir is expected to be of the form: '/path/to/tiles'
         Note: all segmentation masks extracted for this class will obviously be blank
         """
 
         if not hasattr(self, 'tileDictionary'):
             raise PermissionError(
                 'setTileProperties must be called before extracting tiles')
-
-        if not hasattr(self, 'annotationClassMultiPolygons'):
-            raise PermissionError(
-                'addAnnotations must be called before extracting tiles')
 
         if extractForegroundTilesOnly and extractTissueTilesOnly:
             raise ValueError('Only one of extractTissueTilesOnly and extractForegroundTilesOnly can be set to True, not both')
@@ -857,9 +933,17 @@ class Slide:
 
         # Create empty class tile directory
         try:
-            os.makedirs(os.path.join(pathToTileDir, id, unannotatedClassName), exist_ok=True)
+            os.makedirs(os.path.join(outputDir, 'tiles', id, unannotatedClassName), exist_ok=True)
         except:
-            raise ValueError(os.path.join(pathToTileDir, id, unannotatedClassName)+' is not a valid path')
+            raise ValueError(os.path.join(outputDir, 'tiles', id, unannotatedClassName)+' is not a valid path')
+
+        # Create empty class mask directory (if desired)
+        if extractSegmentationMasks:
+            try:
+                os.makedirs(os.path.join(outputDir, 'masks', id, unannotatedClassName), exist_ok=True)
+            except:
+                raise ValueError(os.path.join(outputDir, 'masks', id, unannotatedClassName)+' is not a valid path')
+
 
         # Extract the desired number of unannotated tiles
 
@@ -871,12 +955,12 @@ class Slide:
         for tl in unannotatedTilesToExtract:
             #print("On tile:", tl)
             area = self.getTile(tl)
-            area.write_to_file(os.path.join(pathToTileDir, id, unannotatedClassName,
+            area.write_to_file(os.path.join(outputDir, 'tiles', id, unannotatedClassName,
                 id+'_'+unannotatedClassName+'_'+str(self.tileDictionary[tl]['x'])+'x_'+str(self.tileDictionary[tl]['y'])+'y'+'_'+str(self.tileDictionary[tl]['height'])+'tilesize.jpg'), Q=100)
             if extractSegmentationMasks:
                 height = self.tileDictionary[tl]['height']
                 mask = Image.new('1', (height, height), 0) # blank mask
-                mask.save(os.path.join(pathToTileDir, id, unannotatedClassName,
+                mask.save(os.path.join(outputDir, 'masks', id, unannotatedClassName,
                     id+'_'+unannotatedClassName+'_'+str(self.tileDictionary[tl]['x'])+'x_'+str(self.tileDictionary[tl]['y'])+'y'+'_'+str(self.tileDictionary[tl]['height'])+'tilesize_mask.jpg'))
 
 
