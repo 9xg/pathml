@@ -16,6 +16,7 @@ import matplotlib.pyplot as plt
 from pathlib import Path
 from pathml.processor import Processor
 from pathml.models.tissuedetector import tissueDetector
+from pathml.utils.WholeSlideImageDataset import WholeSlideImageDataset
 import xml.etree.ElementTree as ET
 from shapely import geometry
 from shapely.ops import unary_union
@@ -208,7 +209,7 @@ class Slide:
             localTmpTile = self.lowMagSlide[tileYPos:tileYPos + tileHeight, tileXPos:tileXPos + tileWidth]
             localTmpTileMean = np.nanmean(localTmpTile)
             self.tileDictionary[tileAddress].update({'foregroundLevel': localTmpTileMean})
-            if localTmpTileMean <= thresholdLevel: # bug, should be greater than, changing
+            if localTmpTileMean <= thresholdLevel:
                 self.tileDictionary[tileAddress].update({'foreground': True})
                 self.foregroundTileAddresses.append(tileAddress)
             else:
@@ -318,6 +319,9 @@ class Slide:
     def hasTissueDetection(self):
         return hasattr(self, 'rawTissueDetectionMap')
 
+    #def hasInferredClassifications(self):
+    #    return hasattr(self, 'rawTissueDetectionMap')
+
 # TODO: a check tileaddress function
     def iterateTiles(self, tileDictionary=False, includeImage=False, writeToNumpy=False):
         tileDictionaryIterable = self.tileDictionary if not tileDictionary else tileDictionary
@@ -328,7 +332,7 @@ class Slide:
             else:
                 yield key
 
-    def getTileCount(self, foregroundOnly=False):
+    def getTileCount(self, foregroundOnly=False, tissueLevelThreshold=False, foregroundLevelThreshold=False):
         if not hasattr(self, 'tileDictionary'):
             raise PermissionError(
                 'setTileProperties must be called before tile counting')
@@ -665,13 +669,15 @@ class Slide:
 
 
     # ADAM EXPERIMENTAL
-    def extractAnnotationTiles(self, outputDir, tileDirName=False, numTilesToExtractPerClass='all', classesToExtract='all', extractSegmentationMasks=False,
-        tileAnnotationOverlapThreshold=0.5, foregroundLevelThreshold=False, tissueLevelThreshold=False, returnTileStats=True, seed=False):
+    def extractAnnotationTiles(self, outputDir, tileDirName=False, numTilesToExtractPerClass='all', classesToExtract=False, otherClassNames=False,
+        extractSegmentationMasks=False, tileAnnotationOverlapThreshold=0.5, foregroundLevelThreshold=False, tissueLevelThreshold=False,
+        returnTileStats=True, seed=False):
         """
         Extract tiles that overlap with annotations into directory structure amenable to torch.utils.data.ConcatDataset
         outputDir is expected to be of the form: '/path/to/tiles'
         numTilesToExtractPerClass is expected to be positive integer, a dictionary with class names as keys and positive integers as values, or 'all' to extract all suitable tiles for each class
-        classesToExtract is expected to be 'all' or a list
+        classesToExtract defaults to extracting all classes found in the annotations, but if defined, must be a string or a list of strings.
+        otherClassNames, if defined, creates an empty class directory alongside the unannotated class directory for each class name in the list (or string) for torch ImageFolder purposes
         tissueLevelThreshold, if defined, only considers tiles with a 0 to 1 tissueLevel probability greater than or equal to the set value
         foregroundLevelThreshold, if defined, only considers tiles with a 0-100 foregroundLevel value less or equal to than the set value (0 is a black tile, 100 is a white tile)
         tileAnnotationOverlapThreshold is expected to be a number greater than 0 and less than or equal to 1, or a dictionary of such values, with a key for each class to extract
@@ -702,7 +708,7 @@ class Slide:
 
         # get classes to extract
         extractionClasses = []
-        if classesToExtract == 'all':
+        if not classesToExtract:
             for key, value in self.tileDictionary[list(self.tileDictionary.keys())[0]].items():
                 if 'Overlap' in key:
                     extractionClasses.append(key)
@@ -711,8 +717,13 @@ class Slide:
             for extractionClass in extractionClasses:
                 if extractionClass not in self.tileDictionary[list(self.tileDictionary.keys())[0]]:
                     raise ValueError(extractionClass+' not found in tile dictionary')
+        elif type(classesToExtract) == str:
+            extractionClasses = [classesToExtract+'Overlap']
+            if extractionClasses[0] not in self.tileDictionary[list(self.tileDictionary.keys())[0]]:
+                raise ValueError(extractionClasses[0]+' not found in tile dictionary')
+
         else:
-            raise ValueError("classesToExtract must be 'all' or a list of class names")
+            raise ValueError("classesToExtract must be a string or list of strings")
         extractionClasses = [extractionClass.split('Overlap')[0] for extractionClass in extractionClasses]
         print('Found '+str(len(extractionClasses))+' class(es) to extract:', extractionClasses)
 
@@ -744,9 +755,9 @@ class Slide:
         for address in self.iterateTiles():
             if (tissueLevelThreshold) and (foregroundLevelThreshold):
                 if 'tissueLevel' not in self.tileDictionary[address]:
-                    raise ValueError('Deep tissue detection must be performed with detectTissue() before tissueLevelThreshold can be defined')
+                    raise PermissionError('Deep tissue detection must be performed with detectTissue() before tissueLevelThreshold can be defined')
                 if 'foregroundLevel' not in self.tileDictionary[address]:
-                    raise ValueError('Foreground detection must be performed with detectForeground() before foregroundLevelThreshold can be defined')
+                    raise PermissionError('Foreground detection must be performed with detectForeground() before foregroundLevelThreshold can be defined')
                 if (self.tileDictionary[address]['tissueLevel'] >= tissueLevelThreshold) and (self.tileDictionary[address]['foregroundLevel'] <= foregroundLevelThreshold):
                     for extractionClass in extractionClasses:
                         if self.tileDictionary[address][extractionClass+'Overlap'] >= annotationOverlapThresholdDict[extractionClass]:
@@ -754,7 +765,7 @@ class Slide:
 
             elif (tissueLevelThreshold) and (not foregroundLevelThreshold):
                 if 'tissueLevel' not in self.tileDictionary[address]:
-                    raise ValueError('Deep tissue detection must be performed with detectTissue() before tissueLevelThreshold can be defined')
+                    raise PermissionError('Deep tissue detection must be performed with detectTissue() before tissueLevelThreshold can be defined')
                 if self.tileDictionary[address]['tissueLevel'] >= tissueLevelThreshold: # do not extract background and artifact tiles
                     for extractionClass in extractionClasses:
                         if self.tileDictionary[address][extractionClass+'Overlap'] >= annotationOverlapThresholdDict[extractionClass]:
@@ -762,7 +773,7 @@ class Slide:
 
             elif (foregroundLevelThreshold) and (not tissueLevelThreshold):
                 if 'foregroundLevel' not in self.tileDictionary[address]:
-                    raise ValueError('Foreground detection must be performed with detectForeground() before foregroundLevelThreshold can be defined')
+                    raise PermissionError('Foreground detection must be performed with detectForeground() before foregroundLevelThreshold can be defined')
                 if self.tileDictionary[address]['foregroundLevel'] <= foregroundLevelThreshold:
                     for extractionClass in extractionClasses:
                         if self.tileDictionary[address][extractionClass+'Overlap'] >= annotationOverlapThresholdDict[extractionClass]:
@@ -779,7 +790,7 @@ class Slide:
                 raise ValueError('If numTilesToExtractPerClass is an integer, it must be greater than 0')
             for extractionClass in extractionClasses:
                 if len(annotatedTileAddresses[extractionClass]) == 0:
-                    raise Warning('0 suitable '+extractionClass+' tiles found')
+                    print('Warning: 0 suitable '+extractionClass+' tiles found')
                 if len(annotatedTileAddresses[extractionClass]) < numTilesToExtractPerClass:
                     print('Warning: '+str(len(annotatedTileAddresses[extractionClass]))+' suitable '+extractionClass+' tiles found but requested '+str(numTilesToExtractPerClass)+' tiles to extract. Extracting all suitable tiles...')
                     annotatedTilesToExtract[extractionClass] = annotatedTileAddresses[extractionClass]
@@ -789,7 +800,7 @@ class Slide:
         elif numTilesToExtractPerClass == 'all':
             for extractionClass in extractionClasses:
                 if len(annotatedTileAddresses[extractionClass]) == 0:
-                    raise Warning('0 suitable '+extractionClass+' tiles found')
+                    print('Warning: 0 suitable '+extractionClass+' tiles found')
                 if len(annotatedTileAddresses[extractionClass]) > 500:
                     print('Warning: '+str(len(annotatedTileAddresses[extractionClass]))+' suitable '+extractionClass+' tiles found')
                 annotatedTilesToExtract[extractionClass] = annotatedTileAddresses[extractionClass]
@@ -800,7 +811,7 @@ class Slide:
                     raise Warning('Class '+ec+' present as a key in numTilesToExtractPerClass dictionary but absent from the tileDictionary')
             for extractionClass in extractionClasses:
                 if len(annotatedTileAddresses[extractionClass]) == 0:
-                    raise Warning('0 suitable '+extractionClass+' tiles found')
+                    print('Warning: 0 suitable '+extractionClass+' tiles found')
                 if extractionClass not in numTilesToExtractPerClass:
                     raise ValueError(extractionClass+' not present in the numTilesToExtractPerClass dictionary')
                 numTiles = numTilesToExtractPerClass[extractionClass]
@@ -815,18 +826,52 @@ class Slide:
         else:
             raise ValueError("numTilesToExtractPerClass must be a positive integer, a dictionary, or 'all'")
 
-        # Create empty class tile directory
-        try:
-            os.makedirs(os.path.join(outputDir, 'tiles', id, extractionClass), exist_ok=True)
-        except:
-            raise ValueError(os.path.join(outputDir, 'tiles', id, extractionClass)+' is not a valid path')
+        # Create empty class tile directories for extractionClasses with at least one suitable tile
+        for extractionClass,tte in annotatedTilesToExtract.items():
+            if len(tte) > 0:
+                try:
+                    os.makedirs(os.path.join(outputDir, 'tiles', id, extractionClass), exist_ok=True)
+                except:
+                    raise ValueError(os.path.join(outputDir, 'tiles', id, extractionClass)+' is not a valid path')
+                if otherClassNames:
+                    if type(otherClassNames) == str:
+                        try:
+                            os.makedirs(os.path.join(outputDir, 'tiles', id, otherClassNames), exist_ok=True)
+                        except:
+                            raise ValueError(os.path.join(outputDir, 'tiles', id, otherClassNames)+' is not a valid path')
+                    elif type(otherClassNames) == list:
+                        for otherClassName in otherClassNames:
+                            if type(otherClassName) != str:
+                                raise ValueError('If otherClassNames is a list, all elements of list must be strings')
+                            try:
+                                os.makedirs(os.path.join(outputDir, 'tiles', id, otherClassName), exist_ok=True)
+                            except:
+                                raise ValueError(os.path.join(outputDir, 'tiles', id, otherClassName)+' is not a valid path')
+                    else:
+                        raise ValueError('otherClassNames must be a string or list of strings')
 
-        # Create empty class mask directory (if desired)
-        if extractSegmentationMasks:
-            try:
-                os.makedirs(os.path.join(outputDir, 'masks', id, extractionClass), exist_ok=True)
-            except:
-                raise ValueError(os.path.join(outputDir, 'masks', id, extractionClass)+' is not a valid path')
+                # Create empty class mask directory (if desired)
+                if extractSegmentationMasks:
+                    try:
+                        os.makedirs(os.path.join(outputDir, 'masks', id, extractionClass), exist_ok=True)
+                    except:
+                        raise ValueError(os.path.join(outputDir, 'masks', id, extractionClass)+' is not a valid path')
+                    if otherClassNames:
+                        if type(otherClassNames) == str:
+                            try:
+                                os.makedirs(os.path.join(outputDir, 'masks', id, otherClassNames), exist_ok=True)
+                            except:
+                                raise ValueError(os.path.join(outputDir, 'masks', id, otherClassNames)+' is not a valid path')
+                        elif type(otherClassNames) == list:
+                            for otherClassName in otherClassNames:
+                                if type(otherClassName) != str:
+                                    raise ValueError('If otherClassNames is a list, all elements of list must be strings')
+                                try:
+                                    os.makedirs(os.path.join(outputDir, 'masks', id, otherClassName), exist_ok=True)
+                                except:
+                                    raise ValueError(os.path.join(outputDir, 'masks', id, otherClassName)+' is not a valid path')
+                        else:
+                            raise ValueError('otherClassNames must be a string or list of strings')
 
         channel_sums = np.zeros(3)
         channel_squared_sums = np.zeros(3)
@@ -835,10 +880,11 @@ class Slide:
 
         # Extract tiles
         for ec,tte in annotatedTilesToExtract.items():
-            if extractSegmentationMasks:
-                print("Extracting "+str(len(tte))+" of "+str(len(annotatedTileAddresses[ec]))+" "+ec+" tiles and segmentation masks...")
-            else:
-                print("Extracting "+str(len(tte))+" of "+str(len(annotatedTileAddresses[ec]))+" "+ec+" tiles...")
+            if len(tte) > 0:
+                if extractSegmentationMasks:
+                    print("Extracting "+str(len(tte))+" of "+str(len(annotatedTileAddresses[ec]))+" "+ec+" tiles and segmentation masks...")
+                else:
+                    print("Extracting "+str(len(tte))+" of "+str(len(annotatedTileAddresses[ec]))+" "+ec+" tiles...")
 
             for tl in tte:
                 area = self.getTile(tl)
@@ -870,6 +916,9 @@ class Slide:
                         id+'_'+ec+'_'+str(self.tileDictionary[tl]['x'])+'x_'+str(self.tileDictionary[tl]['y'])+'y'+'_'+str(self.tileDictionary[tl]['height'])+'tilesize_mask.gif'))
 
 
+        if tileCounter == 0:
+            print('Warning: 0 suitable aannotated tiles found across all classes; making no tile directories and returning zeroes')
+
         if returnTileStats:
             if tileDirName:
                 return {'slide': tileDirName,
@@ -881,6 +930,8 @@ class Slide:
                         'channel_sums': channel_sums,#np.mean(channel_means_across_tiles, axis=0).tolist(),
                         'channel_squared_sums': channel_squared_sums,#np.mean(channel_stds_across_tiles, axis=0).tolist(),
                         'num_tiles': tileCounter}
+        else:
+            return True
             #channel_means_across_tiles = np.array(channel_means_across_tiles)
             #channel_stds_across_tiles = np.array(channel_stds_across_tiles)
             #return {'channel_means': np.mean(channel_means_across_tiles, axis=0),
@@ -897,11 +948,12 @@ class Slide:
             # automatically detect whether it is an asap xml or qupath geojson (and if not throw error)
 
     # ADAM EXPERIMENTAL
-    def extractRandomUnannotatedTiles(self, outputDir, tileDirName=False, numTilesToExtract=50, unannotatedClassName='unannotated', extractSegmentationMasks=False,
-        foregroundLevelThreshold=False, tissueLevelThreshold=False, returnTileStats=True, seed=False):
+    def extractRandomUnannotatedTiles(self, outputDir, tileDirName=False, numTilesToExtract=50, unannotatedClassName='unannotated', otherClassNames=False,
+        extractSegmentationMasks=False, foregroundLevelThreshold=False, tissueLevelThreshold=False, returnTileStats=True, seed=False):
         """
         Extract randomly selected tiles that don't overlap any annotations into directory structure amenable to torch.utils.data.ConcatDataset
         outputDir is expected to be of the form: '/path/to/tiles'
+        otherClassNames, if defined, creates an empty class directory alongside the unannotated class directory for each class name in the list (or string) for torch ImageFolder purposes
         tissueLevelThreshold, if defined, only considers tiles with a 0 to 1 tissueLevel probability greater than or equal to the set value
         foregroundLevelThreshold, if defined, only considers tiles with a 0-100 foregroundLevel value less or equal to than the set value (0 is a black tile, 100 is a white tile)
         returnTileStats returns the 0-1 normalized sum of channel values, the sum of the squares of channel values, and the number of tiles extracted for use in global mean and variance computation
@@ -946,9 +998,9 @@ class Slide:
 
             if tissueLevelThreshold and foregroundLevelThreshold:
                 if 'tissueLevel' not in self.tileDictionary[address]:
-                    raise ValueError('Deep tissue detection must be performed with detectTissue() before tissueLevelThreshold can be defined')
+                    raise PermissionError('Deep tissue detection must be performed with detectTissue() before tissueLevelThreshold can be defined')
                 if 'foregroundLevel' not in self.tileDictionary[address]:
-                    raise ValueError('Foreground detection must be performed with detectForeground() before tissueLevelThreshold can be defined')
+                    raise PermissionError('Foreground detection must be performed with detectForeground() before tissueLevelThreshold can be defined')
                 #if foregroundLevelThreshold:
                 if (self.tileDictionary[address]['tissueLevel'] >= tissueLevelThreshold) and (self.tileDictionary[address]['foregroundLevel'] <= foregroundLevelThreshold):
                     overlapsAnnotation = False
@@ -961,7 +1013,7 @@ class Slide:
 
             elif (tissueLevelThreshold) and (not foregroundLevelThreshold):
                 if 'tissueLevel' not in self.tileDictionary[address]:
-                    raise ValueError('Deep tissue detection must be performed with detectTissue() before tissueLevelThreshold can be defined')
+                    raise PermissionError('Deep tissue detection must be performed with detectTissue() before tissueLevelThreshold can be defined')
                 if self.tileDictionary[address]['tissueLevel'] >= tissueLevelThreshold: # do not extract background and artifact tiles
                     overlapsAnnotation = False
                     for annotationClass in annotationClasses:
@@ -973,7 +1025,7 @@ class Slide:
 
             elif (foregroundLevelThreshold) and (not tissueLevelThreshold):
                 if 'foregroundLevel' not in self.tileDictionary[address]:
-                    raise ValueError('Foreground detection must be performed with detectForeground() before foregroundLevelThreshold can be defined')
+                    raise PermissionError('Foreground detection must be performed with detectForeground() before foregroundLevelThreshold can be defined')
                 if self.tileDictionary[address]['foregroundLevel'] <= foregroundLevelThreshold:
                     overlapsAnnotation = False
                     for annotationClass in annotationClasses:
@@ -993,7 +1045,7 @@ class Slide:
                     unannotatedTileAddresses.append(address)
 
         if len(unannotatedTileAddresses) == 0:
-            raise Warning('0 unannotated tiles found')
+            print('Warning: 0 unannotated tiles found; making no tile directories and returning zeroes')
         if len(unannotatedTileAddresses) < numTilesToExtract:
             print('Warning: '+str(len(unannotatedTileAddresses))+' unannotated tiles found but requested '+str(numTilesToExtract)+' tiles to extract. Extracting all suitable tiles...')
             unannotatedTilesToExtract = unannotatedTileAddresses
@@ -1001,27 +1053,58 @@ class Slide:
             unannotatedTilesToExtract = random.sample(unannotatedTileAddresses, numTilesToExtract)
             #print(str(len(unannotatedTileAddresses))+' unannotated tiles found in total')
 
-        # Create empty class tile directory
-        try:
-            os.makedirs(os.path.join(outputDir, 'tiles', id, unannotatedClassName), exist_ok=True)
-        except:
-            raise ValueError(os.path.join(outputDir, 'tiles', id, unannotatedClassName)+' is not a valid path')
-
-        # Create empty class mask directory (if desired)
-        if extractSegmentationMasks:
+        # Create empty class tile directories
+        if len(unannotatedTileAddresses) > 0:
             try:
-                os.makedirs(os.path.join(outputDir, 'masks', id, unannotatedClassName), exist_ok=True)
+                os.makedirs(os.path.join(outputDir, 'tiles', id, unannotatedClassName), exist_ok=True)
             except:
-                raise ValueError(os.path.join(outputDir, 'masks', id, unannotatedClassName)+' is not a valid path')
+                raise ValueError(os.path.join(outputDir, 'tiles', id, unannotatedClassName)+' is not a valid path')
+            if otherClassNames:
+                if type(otherClassNames) == str:
+                    try:
+                        os.makedirs(os.path.join(outputDir, 'tiles', id, otherClassNames), exist_ok=True)
+                    except:
+                        raise ValueError(os.path.join(outputDir, 'tiles', id, otherClassNames)+' is not a valid path')
+                elif type(otherClassNames) == list:
+                    for otherClassName in otherClassNames:
+                        if type(otherClassName) != str:
+                            raise ValueError('If otherClassNames is a list, all elements of list must be strings')
+                        try:
+                            os.makedirs(os.path.join(outputDir, 'tiles', id, otherClassName), exist_ok=True)
+                        except:
+                            raise ValueError(os.path.join(outputDir, 'tiles', id, otherClassName)+' is not a valid path')
+                else:
+                    raise ValueError('otherClassNames must be a string or list of strings')
 
+            # Create empty class mask directory (if desired)
+            if extractSegmentationMasks:
+                try:
+                    os.makedirs(os.path.join(outputDir, 'masks', id, unannotatedClassName), exist_ok=True)
+                except:
+                    raise ValueError(os.path.join(outputDir, 'masks', id, unannotatedClassName)+' is not a valid path')
+                if otherClassNames:
+                    if type(otherClassNames) == str:
+                        try:
+                            os.makedirs(os.path.join(outputDir, 'masks', id, otherClassNames), exist_ok=True)
+                        except:
+                            raise ValueError(os.path.join(outputDir, 'masks', id, otherClassNames)+' is not a valid path')
+                    elif type(otherClassNames) == list:
+                        for otherClassName in otherClassNames:
+                            if type(otherClassName) != str:
+                                raise ValueError('If otherClassNames is a list, all elements of list must be strings')
+                            try:
+                                os.makedirs(os.path.join(outputDir, 'masks', id, otherClassName), exist_ok=True)
+                            except:
+                                raise ValueError(os.path.join(outputDir, 'masks', id, otherClassName)+' is not a valid path')
+                    else:
+                        raise ValueError('otherClassNames must be a string or list of strings')
+
+            if extractSegmentationMasks:
+                print("Extracting "+str(len(unannotatedTilesToExtract))+" of "+str(len(unannotatedTileAddresses))+" "+unannotatedClassName+" tiles and segmentation masks...")
+            else:
+                print("Extracting "+str(len(unannotatedTilesToExtract))+" of "+str(len(unannotatedTileAddresses))+" "+unannotatedClassName+" tiles...")
 
         # Extract the desired number of unannotated tiles
-
-        if extractSegmentationMasks:
-            print("Extracting "+str(len(unannotatedTilesToExtract))+" of "+str(len(unannotatedTileAddresses))+" "+unannotatedClassName+" tiles and segmentation masks...")
-        else:
-            print("Extracting "+str(len(unannotatedTilesToExtract))+" of "+str(len(unannotatedTileAddresses))+" "+unannotatedClassName+" tiles...")
-
         channel_sums = np.zeros(3)
         channel_squared_sums = np.zeros(3)
         tileCounter = 0
@@ -1088,6 +1171,8 @@ class Slide:
                         'channel_sums': channel_sums,#np.mean(channel_means_across_tiles, axis=0).tolist(),
                         'channel_squared_sums': channel_squared_sums,#np.mean(channel_stds_across_tiles, axis=0).tolist(),
                         'num_tiles': tileCounter}
+        else:
+            return True
 
 
 
@@ -1098,6 +1183,11 @@ class Slide:
                 'setTileProperties must be called before applying tissue detector')
         if hasattr(self, 'rawTissueDetectionMap') and (not overwriteExistingTissueDetection):
             raise Warning('Tissue detection has already been performed. Use overwriteExistingTissueDetection if you wish to write over it')
+
+        if torch.cuda.is_available():
+            print("Inferring tissue detection model using GPU")
+        else:
+            print("Inferring tissue detection model using CPU")
 
         print("Detecting tissue of "+self.slideFilePath)
         tissueForegroundSlide = Slide(self.slideFilePath, level=tissueDetectionLevel).setTileProperties(tileSize=tissueDetectionTileSize, tileOverlap=tissueDetectionTileOverlap) # tile size and overlap for tissue detector, not final tiles
@@ -1122,6 +1212,9 @@ class Slide:
 
     # ADAM EXPERIMENTAL
     def plotResizedTissueDetectionMap(self, fileName=False, folder=os.getcwd()):
+        """
+        Blue is tissue, green is background, red is artifact
+        """
         if not hasattr(self, 'tileDictionary'):
             raise PermissionError('setTileProperties must be called before saving self')
         if not hasattr(self, 'rawTissueDetectionMap'):
@@ -1138,3 +1231,43 @@ class Slide:
 
         map = resize(self.rawTissueDetectionMap, np.zeros([self.numTilesInY, self.numTilesInX]).shape, order=0, anti_aliasing=False)
         plt.imsave(os.path.join(folder, id+'.png'), map)
+
+    # ADAM EXPERIMENTAL
+    def inferClassifier(self, trainedModel, dataTransforms, batchSize=30, numWorkers=16, tissueLevelThreshold=False, foregroundLevelThreshold=False):
+
+        if not hasattr(self, 'tileDictionary'):
+            raise PermissionError(
+                'setTileProperties must be called before inferring a classifier')
+        if tissueLevelThreshold:
+            if not self.hasTissueDetection():
+                raise PermissionError('Deep tissue detection must be performed with detectTissue() before tissueLevelThreshold can be defined')
+        if foregroundLevelThreshold:
+            if 'foregroundLevel' not in self.tileDictionary[list(self.tileDictionary.keys())[0]]:
+                raise PermissionError('Foreground detection must be performed with detectForeground() before tissueLevelThreshold can be defined')
+
+        if torch.cuda.is_available():
+            print("Inferring model on GPU")
+        else:
+            print("Inferring model on CPU")
+
+        device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+        trainedModel.to(device)
+        trainedModel.eval()
+
+        pathSlideDataset = WholeSlideImageDataset(self, tissueLevelThreshold=tissueLevelThreshold,
+            foregroundLevelThreshold=foregroundLevelThreshold, transform=dataTransforms)
+
+        pathSlideDataloader = torch.utils.data.DataLoader(pathSlideDataset, batch_size=batchSize, shuffle=False, num_workers=numWorkers)
+        for inputs in tqdm(pathSlideDataloader):
+            inputTile = inputs['image'].to(device)
+            output = trainedModel(inputTile)
+            output = output.to(device)
+
+            batch_prediction = torch.nn.functional.softmax(
+                output, dim=1).cpu().data.numpy()
+
+            # Reshape it is a Todo - instead of for looping
+            for index in range(len(inputTile)):
+                tileAddress = (inputs['tileAddress'][0][index].item(),
+                               inputs['tileAddress'][1][index].item())
+                self.appendTag(tileAddress, 'prediction', batch_prediction[index, ...])
