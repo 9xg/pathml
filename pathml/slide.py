@@ -1,6 +1,7 @@
 # This is the experimental version of slide with annotation and tile extraction
 # capabilities
 
+import torch
 from torchvision import transforms
 import numpy as np
 import pyvips as pv
@@ -16,7 +17,7 @@ import matplotlib.pyplot as plt
 from pathlib import Path
 from pathml.processor import Processor
 from pathml.models.tissuedetector import tissueDetector
-from pathml.utils.WholeSlideImageDataset import WholeSlideImageDataset
+from pathml.utils.torch.WholeSlideImageDataset import WholeSlideImageDataset
 import xml.etree.ElementTree as ET
 from shapely import geometry
 from shapely.ops import unary_union
@@ -1233,8 +1234,10 @@ class Slide:
         plt.imsave(os.path.join(folder, id+'.png'), map)
 
     # ADAM EXPERIMENTAL
-    def inferClassifier(self, trainedModel, dataTransforms, batchSize=30, numWorkers=16, tissueLevelThreshold=False, foregroundLevelThreshold=False):
-
+    def inferClassifier(self, trainedModel, classNames, dataTransforms=None, batchSize=30, numWorkers=16, tissueLevelThreshold=False, foregroundLevelThreshold=False):
+        """
+        classNames is an alphabetized list of class names
+        """
         if not hasattr(self, 'tileDictionary'):
             raise PermissionError(
                 'setTileProperties must be called before inferring a classifier')
@@ -1244,6 +1247,8 @@ class Slide:
         if foregroundLevelThreshold:
             if 'foregroundLevel' not in self.tileDictionary[list(self.tileDictionary.keys())[0]]:
                 raise PermissionError('Foreground detection must be performed with detectForeground() before tissueLevelThreshold can be defined')
+        if type(classNames) != list:
+            raise ValueError('classes must be a list if defined')
 
         if torch.cuda.is_available():
             print("Inferring model on GPU")
@@ -1258,6 +1263,7 @@ class Slide:
             foregroundLevelThreshold=foregroundLevelThreshold, transform=dataTransforms)
 
         pathSlideDataloader = torch.utils.data.DataLoader(pathSlideDataset, batch_size=batchSize, shuffle=False, num_workers=numWorkers)
+        predictionTileAddresses = []
         for inputs in tqdm(pathSlideDataloader):
             inputTile = inputs['image'].to(device)
             output = trainedModel(inputTile)
@@ -1270,4 +1276,96 @@ class Slide:
             for index in range(len(inputTile)):
                 tileAddress = (inputs['tileAddress'][0][index].item(),
                                inputs['tileAddress'][1][index].item())
-                self.appendTag(tileAddress, 'prediction', batch_prediction[index, ...])
+                preds = batch_prediction[index, ...].tolist()
+                if len(preds) != len(classNames):
+                    raise ValueError('Model has '+str(len(preds))+' classes but only '+str(len(classes))+' class names were provided in the classes argument')
+                prediction = {}
+                for i, pred in enumerate(preds):
+                    prediction[classNames[i]] = pred
+                self.appendTag(tileAddress, 'inferencePrediction', prediction)
+                predictionTileAddresses.append()
+        if len(predictionTileAddresses) > 0:
+            self.predictionTileAddresses = predictionTileAddresses
+        else:
+            raise Warning('No suitable tiles found at current tissueLevelThreshold and foregroundLevelThreshold')
+
+    def suitableTileAddresses(self, tissueLevelThreshold=False, foregroundLevelThreshold=False):
+        suitableTileAddresses = []
+        for tA in self.iterateTiles():
+            if tissueLevelThreshold and foregroundLevelThreshold:
+                if (self.tileDictionary[tA]['tissueLevel'] >= tissueLevelThreshold) and (self.tileDictionary[tA]['foregroundLevel'] <= foregroundLevelThreshold):
+                    suitableTileAddresses.append(tA)
+            elif tissueLevelThreshold and not foregroundLevelThreshold:
+                if (self.tileDictionary[tA]['tissueLevel'] >= tissueLevelThreshold):
+                    suitableTileAddresses.append(tA)
+            elif foregroundLevelThreshold and not tissueLevelThreshold:
+                if (self.tileDictionary[tA]['foregroundLevel'] <= foregroundLevelThreshold):
+                    suitableTileAddresses.append(tA)
+            else:
+                suitableTileAddresses.append(tA)
+        return suitableTileAddresses
+
+    def visualizeInference(self, classToVisualize, folder=False, level=4):
+        ourNewImg = self.thumbnail(level=level)
+        classMask = np.zeros((self.numTilesInX, self.numTilesInY)[::-1])
+
+        #if not hasattr(self, 'predictionTileAddresses'):
+        foundPrediction = False
+        for tileAddress, tileEntry in self.tileDictionary.items():
+            if 'inferencePrediction' in tileEntry:
+                if classToVisualize in tileEntry['inferencePrediction']:
+                    classMask[tileAddress[1],tileAddress[0]] = tileEntry['inferencePrediction'][classToVisualize]
+                    foundPrediction = True
+                else:
+                    raise ValueError(classToVisualize+' not in inferencePrediction')
+            else:
+                classMask[tileAddress[1],tileAddress[0]] = 0
+        if not foundPrediction:
+            raise ValueError('No predictions found in slide. Use inferClassifier() to generate them.')
+
+        plt.figure()
+        plt.imshow(resize(ourNewImg, classMask.shape))
+        plt.imshow(classMask, cmap='plasma', alpha=0.3, vmin=0, vmax=1.0)
+        plt.colorbar()
+        plt.title(self.slideFileName+"\n"+classToVisualize)
+        if folder:
+            os.makedirs(os.path.join(folder, self.slideFileName), exist_okay=True)
+            plt.savefig(os.path.join(folder, self.slideFileName, self.slideFileName+"_"+classToVisualize+".png"))
+        else:
+            plt.show(block=False)
+
+    def thresholdClassPredictions(self, classToThreshold, probabilityThresholds):
+        if not hasattr(self, 'predictionTileAddresses'):
+            foundPrediction = False
+            predictionTileAddresses = []
+            for tileAddress, tileEntry in self.tileDictionary.items():
+                if 'inferencePrediction' in tileEntry:
+                    predictionTileAddresses.append(tileAddress)
+                    foundPrediction = True
+            if foundPrediction:
+                self.predictionTileAddresses = predictionTileAddresses
+            else:
+                raise ValueError('No predictions found in slide. Use inferClassifier() to generate them.')
+
+        if type(probabilityThresholds) in [float, int]:
+            pT = [probabilityThresholds]
+        elif type(probabilityThresholds) == list:
+            pT = probabilityThresholds
+        else:
+            raise ValueError('probabilityThresholds must be an int, float, or list of ints or floats')
+
+
+        numTilesAboveProbThreshList = []
+        for probabilityThreshold in pT:
+            numTilesAboveProbThresh = 0
+            for addr in self.predictionTileAddresses:
+                if classToThreshold not in self.tileDictionary[addr]['inferencePrediction']:
+                    raise ValueError(classToVisualize+' not in inferencePrediction')
+                if self.tileDictionary[addr]['inferencePrediction'][classToThreshold] > probabilityThreshold:
+                    numTilesAboveProbThresh = numTilesAboveProbThresh + 1
+            numTilesAboveProbThreshList.append(numTilesAboveProbThresh)
+
+        if len(numTilesAboveProbThreshList) > 1:
+            return numTilesAboveProbThreshList
+        else:
+            return numTilesAboveProbThreshList[0]

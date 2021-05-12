@@ -11,29 +11,30 @@ class WholeSlideImageDataset(Dataset):
         self.tissueLevelThreshold = tissueLevelThreshold
         self.foregroundLevelThreshold = foregroundLevelThreshold
         self.transform = transform
-        self.suitableTileAddresses = []
+        self.suitableTileAddresses = self.slideClass.suitableTileAddresses(tissueLevelThreshold=self.tissueLevelThreshold,
+                                                                            foregroundLevelThreshold=self.foregroundLevelThreshold)
 
-        for tA in self.slideClass.iterateTiles():
-            if tissueLevelThreshold and foregroundLevelThreshold:
-                if (self.slideClass.tileDictionary[tA]['tissueLevel'] >= tissueLevelThreshold) and (self.slideClass.tileDictionary[tA]['foregroundLevel'] <= foregroundLevelThreshold):
-                    self.suitableTileAddresses.append(tA)
-            elif tissueLevelThreshold and not foregroundLevelThreshold:
-                if (self.slideClass.tileDictionary[tA]['tissueLevel'] >= tissueLevelThreshold):
-                    self.suitableTileAddresses.append(tA)
-            elif foregroundLevelThreshold and not tissueLevelThreshold:
-                if (self.slideClass.tileDictionary[tA]['foregroundLevel'] <= foregroundLevelThreshold):
-                    self.suitableTileAddresses.append(tA)
-            else:
-                self.suitableTileAddresses.append(tA)
+        #for tA in self.slideClass.iterateTiles():
+        #    if self.tissueLevelThreshold and self.foregroundLevelThreshold:
+        #        if (self.slideClass.tileDictionary[tA]['tissueLevel'] >= self.tissueLevelThreshold) and (self.slideClass.tileDictionary[tA]['foregroundLevel'] <= self.foregroundLevelThreshold):
+        #            self.suitableTileAddresses.append(tA)
+        #    elif self.tissueLevelThreshold and not self.foregroundLevelThreshold:
+        #        if (self.slideClass.tileDictionary[tA]['tissueLevel'] >= self.tissueLevelThreshold):
+        #            self.suitableTileAddresses.append(tA)
+        #    elif self.foregroundLevelThreshold and not self.tissueLevelThreshold:
+        #        if (self.slideClass.tileDictionary[tA]['foregroundLevel'] <= self.foregroundLevelThreshold):
+        #            self.suitableTileAddresses.append(tA)
+        #    else:
+        #        self.suitableTileAddresses.append(tA)
 
     def __len__(self):
-        if tissueLevelThreshold or foregroundLevelThreshold:
+        if self.tissueLevelThreshold or self.foregroundLevelThreshold:
             return len(self.suitableTileAddresses)
         else:
             return self.slideClass.getTileCount(foregroundOnly=self.foregroundOnly)
 
     def __getitem__(self, idx):
-        if tissueLevelThreshold or foregroundLevelThreshold:
+        if self.tissueLevelThreshold or self.foregroundLevelThreshold:
             tileAddress = self.suitableTileAddresses[idx]
         else:
             tileAddress = self.slideClass.ind2sub(idx, foregroundOnly=self.foregroundOnly)
