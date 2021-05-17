@@ -668,11 +668,59 @@ class Slide:
         if verbose: print("\n")
         return mask
 
+    #def numberOfSuitableTiles(self, className, tileAnnotationOverlapThreshold=0.5, foregroundLevelThreshold=False, tissueLevelThreshold=False):
+    #    if not hasattr(self, 'tileDictionary'):
+    #        raise PermissionError(
+    #            'setTileProperties must be called before counting suitable tiles')
+    #    if not hasattr(self, 'annotationClassMultiPolygons'):
+    #        raise PermissionError(
+    #            'addAnnotations must be called before counting suitable tiles')
+    #    if className+'Overlap' not in self.tileDictionary[list(self.tileDictionary.keys())[0]]:
+    #        raise ValueError(className+' not found in tile dictionary')
+    #    print('MADE IT')
+    #    #print(list(self.tileDictionary.keys()))
+    #    kys = list(self.tileDictionary.keys())
+    #    #print(self.tileDictionary)
+    #    tileCounter = 0
+    #    for address in self.iterateTiles():
+    #        print('address', address)
+    #        #if self.tileDictionary[address][className+'Overlap'] >= tileAnnotationOverlapThreshold:
+    #        print(self.tileDictionary[address][className+'Overlap'])
+    #        if (tissueLevelThreshold) and (foregroundLevelThreshold):
+    #            if 'tissueLevel' not in self.tileDictionary[address]:
+    #                raise PermissionError('Deep tissue detection must be performed with detectTissue() before tissueLevelThreshold can be defined')
+    #            if 'foregroundLevel' not in self.tileDictionary[address]:
+    #                raise PermissionError('Foreground detection must be performed with detectForeground() before foregroundLevelThreshold can be defined')
+    #            if (self.tileDictionary[address]['tissueLevel'] >= tissueLevelThreshold) and (self.tileDictionary[address]['foregroundLevel'] <= foregroundLevelThreshold):
+    #                if self.tileDictionary[address][className+'Overlap'] >= tileAnnotationOverlapThreshold:
+    #                    tileCounter = tileCounter + 1
+#
+#            elif (tissueLevelThreshold) and (not foregroundLevelThreshold):
+#                if 'tissueLevel' not in self.tileDictionary[address]:
+#                    raise PermissionError('Deep tissue detection must be performed with detectTissue() before tissueLevelThreshold can be defined')
+#                if self.tileDictionary[address]['tissueLevel'] >= tissueLevelThreshold: # do not extract background and artifact tiles
+#                    if self.tileDictionary[address][className+'Overlap'] >= tileAnnotationOverlapThreshold:
+#                        tileCounter = tileCounter + 1
+#
+#            elif (foregroundLevelThreshold) and (not tissueLevelThreshold):
+#                if 'foregroundLevel' not in self.tileDictionary[address]:
+#                    raise PermissionError('Foreground detection must be performed with detectForeground() before foregroundLevelThreshold can be defined')
+#                if self.tileDictionary[address]['foregroundLevel'] <= foregroundLevelThreshold:
+#                    if self.tileDictionary[address][className+'Overlap'] >= tileAnnotationOverlapThreshold:
+#                        tileCounter = tileCounter + 1
+#
+#            else:
+#                    if self.tileDictionary[address][className+'Overlap'] >= tileAnnotationOverlapThreshold:
+#                        tileCounter = tileCounter + 1
+#
+#            return tileCounter
+
+
 
     # ADAM EXPERIMENTAL
     def extractAnnotationTiles(self, outputDir, tileDirName=False, numTilesToExtractPerClass='all', classesToExtract=False, otherClassNames=False,
         extractSegmentationMasks=False, tileAnnotationOverlapThreshold=0.5, foregroundLevelThreshold=False, tissueLevelThreshold=False,
-        returnTileStats=True, seed=False):
+        returnTileStats=True, returnOnlyNumTilesFromThisClass=False, seed=False,):
         """
         Extract tiles that overlap with annotations into directory structure amenable to torch.utils.data.ConcatDataset
         outputDir is expected to be of the form: '/path/to/tiles'
@@ -683,6 +731,7 @@ class Slide:
         foregroundLevelThreshold, if defined, only considers tiles with a 0-100 foregroundLevel value less or equal to than the set value (0 is a black tile, 100 is a white tile)
         tileAnnotationOverlapThreshold is expected to be a number greater than 0 and less than or equal to 1, or a dictionary of such values, with a key for each class to extract
         returnTileStats returns the 0-1 normalized sum of channel values, the sum of the squares of channel values, and the number of tiles extracted for use in global mean and variance computation
+        returnOnlyNumTilesFromThisClass causes only the number of suitable tiles for the specified class in the slide; no tile images are created
         """
 
         if not hasattr(self, 'tileDictionary'):
@@ -754,6 +803,7 @@ class Slide:
         # Get tiles to extract
         annotatedTileAddresses = {extractionClass: [] for extractionClass in extractionClasses}
         for address in self.iterateTiles():
+            #print('address', address)
             if (tissueLevelThreshold) and (foregroundLevelThreshold):
                 if 'tissueLevel' not in self.tileDictionary[address]:
                     raise PermissionError('Deep tissue detection must be performed with detectTissue() before tissueLevelThreshold can be defined')
@@ -881,6 +931,9 @@ class Slide:
 
         # Extract tiles
         for ec,tte in annotatedTilesToExtract.items():
+            if returnOnlyNumTilesFromThisClass and ec == returnOnlyNumTilesFromThisClass:
+                return(len(annotatedTileAddresses[ec]))
+
             if len(tte) > 0:
                 if extractSegmentationMasks:
                     print("Extracting "+str(len(tte))+" of "+str(len(annotatedTileAddresses[ec]))+" "+ec+" tiles and segmentation masks...")
@@ -916,6 +969,8 @@ class Slide:
                     mask.save(os.path.join(outputDir, 'masks', id, ec,
                         id+'_'+ec+'_'+str(self.tileDictionary[tl]['x'])+'x_'+str(self.tileDictionary[tl]['y'])+'y'+'_'+str(self.tileDictionary[tl]['height'])+'tilesize_mask.gif'))
 
+        if returnOnlyNumTilesFromThisClass:
+            raise Warning(returnOnlyNumTilesFromThisClass+' not found in tile dictionary')
 
         if tileCounter == 0:
             print('Warning: 0 suitable aannotated tiles found across all classes; making no tile directories and returning zeroes')
@@ -1210,6 +1265,25 @@ class Slide:
             self.tileDictionary[address].update({'artifactLevel': predictionMap1res[address[1], address[0]][0]})
             self.tileDictionary[address].update({'backgroundLevel': predictionMap1res[address[1], address[0]][1]})
             self.tileDictionary[address].update({'tissueLevel': predictionMap1res[address[1], address[0]][2]})
+
+    def detectTissueFromRawTissueDetectionMap(self, rawTissueDetectionMap, overwriteExistingTissueDetection=False):
+        if not hasattr(self, 'tileDictionary'):
+            raise PermissionError(
+                'setTileProperties must be called before applying tissue detector')
+        if hasattr(self, 'rawTissueDetectionMap') and (not overwriteExistingTissueDetection):
+            raise Warning('Tissue detection has already been performed. Use overwriteExistingTissueDetection if you wish to write over it')
+
+        predictionMap2 = np.zeros([self.numTilesInY, self.numTilesInX])
+        predictionMap1res = resize(rawTissueDetectionMap, predictionMap2.shape, order=0, anti_aliasing=False)
+
+        self.rawTissueDetectionMap = rawTissueDetectionMap
+        self.resizedTissueDetectionMap = predictionMap1res
+
+        for address in self.iterateTiles():
+            self.tileDictionary[address].update({'artifactLevel': predictionMap1res[address[1], address[0]][0]})
+            self.tileDictionary[address].update({'backgroundLevel': predictionMap1res[address[1], address[0]][1]})
+            self.tileDictionary[address].update({'tissueLevel': predictionMap1res[address[1], address[0]][2]})
+
 
     # ADAM EXPERIMENTAL
     def plotResizedTissueDetectionMap(self, fileName=False, folder=os.getcwd()):
