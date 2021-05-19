@@ -1233,7 +1233,11 @@ class Slide:
 
 
     # ADAM EXPERIMENTAL
-    def detectTissue(self, tissueDetectionLevel=1, tissueDetectionTileSize=512, tissueDetectionTileOverlap=0, tissueDetectionUpsampleFactor=4, batchSize=20, overwriteExistingTissueDetection=False):
+    def detectTissue(self, tissueDetectionLevel=1, tissueDetectionTileSize=512, tissueDetectionTileOverlap=0, tissueDetectionUpsampleFactor=4, batchSize=20, overwriteExistingTissueDetection=False, modelStateDictPath='../pathml/pathml/models/deep-tissue-detector_densenet_state-dict.pt', architecture='densenet'):
+        """
+        modelStateDictPath is the path to the state dictionary of the deep tissue detector; it must be a 3-class classifier, with the class order as follows: background, artifact, tissue
+        architecture is the name of the architecture that the state dict belongs to. Currently supported architectures include resnet18, inceptionv3, vgg16, vgg16_bn, vgg19, vgg19_bn, densenet, alexnet, and squeezenet
+        """
         if not hasattr(self, 'tileDictionary'):
             raise PermissionError(
                 'setTileProperties must be called before applying tissue detector')
@@ -1248,7 +1252,7 @@ class Slide:
         print("Detecting tissue of "+self.slideFilePath)
         tissueForegroundSlide = Slide(self.slideFilePath, level=tissueDetectionLevel).setTileProperties(tileSize=tissueDetectionTileSize, tileOverlap=tissueDetectionTileOverlap) # tile size and overlap for tissue detector, not final tiles
         tmpProcessor = Processor(tissueForegroundSlide)
-        tissueForegroundTmp = tmpProcessor.applyModel(tissueDetector(), batch_size=batchSize, predictionKey='tissue_detector').adoptKeyFromTileDictionary(upsampleFactor=tissueDetectionUpsampleFactor)
+        tissueForegroundTmp = tmpProcessor.applyModel(tissueDetector(modelStateDictPath=modelStateDictPath, architecture=architecture), batch_size=batchSize, predictionKey='tissue_detector').adoptKeyFromTileDictionary(upsampleFactor=tissueDetectionUpsampleFactor)
 
         predictionMap = np.zeros([tissueForegroundTmp.numTilesInY, tissueForegroundTmp.numTilesInX,3])
         for address in tissueForegroundTmp.iterateTiles():
@@ -1286,7 +1290,7 @@ class Slide:
 
 
     # ADAM EXPERIMENTAL
-    def plotResizedTissueDetectionMap(self, fileName=False, folder=os.getcwd()):
+    def plotTissueDetectionMap(self, fileName=False, folder=os.getcwd()):
         """
         Blue is tissue, green is background, red is artifact
         """
@@ -1380,6 +1384,9 @@ class Slide:
         return suitableTileAddresses
 
     def visualizeInference(self, classToVisualize, folder=False, level=4):
+        """
+        folder is the path to the directory where the map will be saved; if it is not defined, then the map will only be shown and not saved
+        """
         ourNewImg = self.thumbnail(level=level)
         classMask = np.zeros((self.numTilesInX, self.numTilesInY)[::-1])
 
