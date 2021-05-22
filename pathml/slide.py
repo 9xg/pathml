@@ -14,6 +14,7 @@ from scipy.ndimage.morphology import binary_fill_holes
 from skimage.color import rgb2gray, rgb2lab
 from skimage.transform import resize
 import matplotlib.pyplot as plt
+import matplotlib as mpl
 from pathlib import Path
 from pathml.processor import Processor
 from pathml.models.tissuedetector import tissueDetector
@@ -37,6 +38,18 @@ def unwrap_self(arg, **kwarg):
     return Slide.square_int(*arg, **kwarg)
 # EXPERIMENTAL END
 class Slide:
+    """The main class of PathML; a representation of whole-slide image containing
+    dictionary of tiles, and upon which further analyses are added, including
+    but not limited to tissue detection and annotation, and from which tiles
+    from whole-slide images can be extracted.
+
+    Args:
+        slideFilePath (string): path to a WSI (to make from scratch) or to a .pml file (to reload a saved Slide object, see saveSelf())
+        newSlideFilePath (string, optional): if loading a .pml file and the location of the WSI has changed, the new path to WSI can be inputted here
+        level (int, optional): the level of the WSI pyramid at which to operate on; 0 is the highest resolution and default and how many levels are present above that depends on the WSI
+        verbose (Boolean, optional): whether to output a verbose output. Default is false.
+    """
+
     __format_to_dtype = {
         'uchar': np.uint8,
         'char': np.int8,
@@ -134,6 +147,18 @@ class Slide:
         print(results)
 # EXPERIMENTAL END
     def setTileProperties(self, tileSize, tileOverlap=0, unit='px'):
+        """A function to set the properties of the tile dictionary in a Slide object.
+        Should be the first function called on a newly created Slide object.
+
+        Args:
+            tileSize (int): the edge length of each square tile in the requested unit
+            tileOverlap (float, optional): the fraction of a tile's edge length that overlaps the left, right, above, and below tiles. Default is 0.
+            unit (string, optional): the unit to measure tileSize by. Default is 'px' for pixels and no other units are current supported
+
+        Example:
+            pathml_slide.setTileProperties(400)
+        """
+
         # TODO: Implement units for tile size selection
         # TODO: Implement padding of boundary tiles
         self.regionWorker = pv.Region.new(self.slide)
@@ -171,11 +196,19 @@ class Slide:
     #def loadTileDictionary(self, dictionaryFilePath):
     #    pass
 
-    def detectForeground(self, threshold, level=2, overwriteExistingForegroundDetection=False):
+    def detectForeground(self, threshold, level=4, overwriteExistingForegroundDetection=False):
+        """A function to implement traditional foreground filtering methods on the
+        tile dictionary to exclude background tiles from subsequent operations.
+
+        Args:
+            threshold (string): the method of foreground filtering desired. Can be set to 'otsu', 'triangle' or an int to do simple darkness thresholding at that int value (tiles with a 0-100 foregroundLevel value less or equal to than the set value are considered foreground, where 0 is a pure black tile, 100 is a pure white tile)
+            level (int, optional): the level of the WSI pyramid to detect foreground on. Default is 4. Not all WSIs will have a 4th level, so alter if necessary. If memory runs out, increase the level to detect foreground with a less high resolution image.
+            overwriteExistingForegroundDetection (Boolean, optional): whether to old foreground detection if it is present in the tile dictionary already. Default is False.
+
+        Example:
+            pathml_slide.detectForeground('otsu')
         """
-        threshold can be set to 'otsu', 'triangle' or an int to do simple thresholding at that int value (tiles with a 0-100 foregroundLevel value less or equal to than the set value are considered foreground, where 0 is a black tile, 100 is a white tile)
-        If memory runs out, increase the level
-        """
+
         if not hasattr(self, 'tileDictionary'):
             raise PermissionError(
                 'setTileProperties must be called before foreground detection')
@@ -218,9 +251,17 @@ class Slide:
         return True
 
     def getTile(self, tileAddress, writeToNumpy=False, useFetch=False):
+        """A function to return a desired tile in the tile dictionary.
+
+        Args:
+            tileAddress (tuple of ints): the (x, y) coordinate touple of the desired tile to extract.
+            writeToNumpy (Boolean, optional): whether to return a numpy array of the tile (otherwise a pyvips Image object will be returbed). Default is False.
+            useFetch (Boolean, optional): whether to use pyvip's fetchTile() function to extract the tile, which is purported to be faster than extractArea(). Default is False.
+
+        Example:
+            pathml_slide.getTile((15,20))
         """
-        Returns a pyvips Image or, if writeToNumpy is set to true, a numpy array
-        """
+
         if not hasattr(self, 'tileDictionary'):
             raise PermissionError(
                 'setTileProperties must be called before accessing tiles')
@@ -255,6 +296,17 @@ class Slide:
             return np.unravel_index(tileIndex, (self.numTilesInX, self.numTilesInY), order='F')
 
     def saveTile(self, tileAddress, fileName, folder=os.getcwd()):
+        """A function to save a specific tile image to an image file.
+
+        Args:
+            tileAddress (tuple of ints): the (x, y) coordinate touple of the desired tile to save.
+            fileName (string): the name of the image file including an image extension.
+            folder (string, optional): the path to the directory where the tile image will be saved. Default is the current working directory.
+
+        Example:
+            pathml_slide.saveTile((15,20), "tile_15x_20y.jpg" folder="/path/to/tiles_directory")
+        """
+
         if not hasattr(self, 'tileDictionary'):
             raise PermissionError(
                 'setTileProperties must be called before saving tile')
@@ -274,6 +326,18 @@ class Slide:
         pickle.dump(self.tileDictionary, open(os.path.join(folder, fileName)+'.pml', 'wb'))
 
     def saveSelf(self, fileName=False, folder=os.getcwd()):
+        """A function to save a pickled PathML Slide object to a .pml file for re-use later
+        (re-loading is performed by providing the path to the .pml file when initializing a Slide object).
+        This function should be re-run after each major step in an analysis on a Slide.
+
+        Args:
+            fileName (string): the name of the pickled file excluding an extension
+            folder (string, optional): the path to the directory where the pickled Slide will be saved. Default is the current working directory.
+
+        Example:
+            pathml_slide.saveSelf("pathml_slide" folder="/path/to/pathml_slides")
+        """
+
         if not hasattr(self, 'tileDictionary'):
             raise PermissionError('setTileProperties must be called before saving self')
 
@@ -300,6 +364,17 @@ class Slide:
         pickle.dump(outputDict, open(os.path.join(folder, id)+'.pml', 'wb'))
 
     def appendTag(self, tileAddress, key, val):
+        """A function to add key-value pair of data to a certain tile in the tile dictionary.
+
+        Args:
+            tileAddress (tuple of ints): the (x, y) coordinate touple of the desired tile to save.
+            key (string): the key to store at the tile address.
+            value: the value to store at the key at the tile address.
+
+        Example:
+            pathml_slide.appendTag((15,20), "brightness_level", 0.7)
+        """
+
         if not hasattr(self, 'tileDictionary'):
             raise PermissionError(
                 'setTileProperties must be called before appending tag')
@@ -315,9 +390,23 @@ class Slide:
         return self.lowMagSlide
 
     def hasAnnotations(self):
+        """A function that returns a Boolean of whether annotations have been
+        added to the tile dictionary.
+
+        Example:
+            pathml_slide.hasAnnotations()
+        """
+
         return hasattr(self, 'annotationClassMultiPolygons')
 
     def hasTissueDetection(self):
+        """A function that returns a Boolean of whether deep tissue detections
+        have been added to the tile dictionary.
+
+        Example:
+            pathml_slide.hasTissueDetection()
+        """
+
         return hasattr(self, 'rawTissueDetectionMap')
 
     #def hasInferredClassifications(self):
@@ -325,6 +414,20 @@ class Slide:
 
 # TODO: a check tileaddress function
     def iterateTiles(self, tileDictionary=False, includeImage=False, writeToNumpy=False):
+        """A generator function to iterate over all tiles in the tile dictionary,
+        returning the tile address or the tile address and the tile image if
+        specified with includeImage.
+
+        Args:
+            tileDictionary (dict, optional): the tile dictionary to iterate over. Default is the Slide's own tile dictionary.
+            includeImage (Boolean, optional): whether to return a numpy array of the tile alongside its address. Default is False.
+            writeToNumpy (Boolean, optional): whether to return a numpy array of the tile (if not, a pyvips Image object will be returned) if includeImage is set to True.
+
+        Example:
+            for address in pathml_slide.iterateTiles():
+                print(address)
+        """
+
         tileDictionaryIterable = self.tileDictionary if not tileDictionary else tileDictionary
         for key, value in tileDictionaryIterable.items():
             # if value['foreground']==True: Inplement exclude background
@@ -333,7 +436,20 @@ class Slide:
             else:
                 yield key
 
-    def getTileCount(self, foregroundOnly=False, tissueLevelThreshold=False, foregroundLevelThreshold=False):
+    def getTileCount(self, foregroundOnly=False, foregroundLevelThreshold=False, tissueLevelThreshold=False):
+        """A function that returns the number of tiles in the tile dictionary.
+        Arguments can be used to find the number of tiles with desired
+        characteristics in the tile dictionary.
+
+        Args:
+            foregroundOnly (Boolean, optional): whether to return the count of only the number of foreground tiles found with detectForeground().
+            foregroundLevelThreshold (int, optional): returns the number of tiles at or above the minimum threshold specified if simple average darkness intensity foreground filtering was used (0 is a pure black tile, 100 is a pure white tile). Default is not to filter the tile count this way. detectForeground() must be run first.
+            tissueLevelThreshold (float, optional): returns the number of tiles at or above the deep tissue detector tissue probability specified. Default is not to filter the tile count this way. detectTissue() must be run first.
+
+        Example:
+            pathml_slide.getTileCount()
+        """
+
         if not hasattr(self, 'tileDictionary'):
             raise PermissionError(
                 'setTileProperties must be called before tile counting')
@@ -343,14 +459,28 @@ class Slide:
             return len(self.tileDictionary)
 
     # ADAM EXPERIMENTAL
-    def addAnnotations(self, annotationFilePath, classesToAdd=False, negativeClass=False, magnificationLevel=0,
+    def addAnnotations(self, annotationFilePath, classesToAdd=False, negativeClass=False, level=0,
         overwriteExistingAnnotations=False, mergeOverlappingAnnotationsOfSameClass=True, acceptMultiPolygonAnnotations=False):
-        """
-        Adds the overlap between all (desired) classes present in an annotation file and each tile in the tile dictionary
-        Annotations within groups in ASAP are taken to be within one class, where the name of the group is the name of the class
-        annotationFilePath must point to either an xml file from the ASAP software or a GeoJSON file from the QuPath software
-        classesToAdd is a list of classes to add from the annotation file. If not specified, all annotation classes will be used (except the negativeClass if one is specified)
-        negativeClass is the name of the class of negative annotations (donut holes) to subtract from the other annotations
+        """A function that adds the overlap between all (desired) classes present in an annotation file and each tile in the tile dictionary
+        Annotations within groups in ASAP are taken to be within one class, where the name of the ASAP group is the name of the class; similarly,
+        annotations within classes in QuPath are taken to be within one class, where the name of the QuPath class is the name of the class.
+        (except the negativeClass if one is specified). Acceptable ASAP annotation tools to make annotations for this function include the
+        RectangleAnnotation, PolyAnnotation, and SplineAnnotation tools; in QuPath, acceptable tools include the Rectangle, Ellipse, Polygon,
+        and Brush tools. Annotations should be polygons, i.e. closed regions that do not self-overlap at any point. Annotations of different
+        classes are expected to never overlap, and annotations of the same class can only overlap (and will be merged into one polygon) if
+        mergeOverlappingAnnotationsOfSameClass is set to True.
+
+        Args:
+            annotationFilePath (string): the path to the file containing the annotation. The file must be either an xml file from the ASAP software or a GeoJSON file from the QuPath software.
+            classesToAdd (list of strings, optional): a list of classes to add from the annotation file. Default is that all annotation classes will be used.
+            negativeClass (string, optional): the name of the class of negative annotations (donut holes) to subtract from the other annotations. Default is not to consider any class to be a negative space class.
+            level (int, optional): the level of the WSI pyramid to make use of. Default is 0.
+            overwriteExistingAnnotations (Boolean, optional): whether to overwrite any preexisting annotations in the tile dictionary. Default is False.
+            mergeOverlappingAnnotationsOfSameClass (Boolean, optional): whether to automatically merge annotations of the same class that overlap into one polygon. Default is True.
+            acceptMultiPolygonAnnotations (Boolean, optional): whether or not to accept annotations that parse into MultiPolygons using Shapely. Default is False and users are strongly discouraged from setting it to True.
+
+        Example:
+            pathml_slide.addAnnotations("/path/to/annotations.xml", negativeClass="negative")
         """
 
         #if fileType != ['asap', 'Asap', 'ASAP', 'qupath', 'Qupath', 'QuPath', 'QUPATH']:
@@ -373,10 +503,10 @@ class Slide:
                     if 'Overlap' in key:
                         del self.tileDictionary[address][key]
 
-        if (not type(magnificationLevel) == int) or (magnificationLevel < 0):
-            raise ValueError('magnificationLevel must be an integer 0 or greater')
-        if 'openslide.level['+str(magnificationLevel)+'].downsample' not in self.slideProperties:
-            raise ValueError('magnificationLevel not present in slide')
+        if (not type(level) == int) or (level < 0):
+            raise ValueError('level must be an integer 0 or greater')
+        if 'openslide.level['+str(level)+'].downsample' not in self.slideProperties:
+            raise ValueError('level not present in slide')
         if (classesToAdd) and (not isinstance(classesToAdd, list)):
             raise ValueError("classestoAdd must a list")
         if not os.path.isfile(annotationFilePath):
@@ -391,7 +521,7 @@ class Slide:
                 fileType = 'qupath_geojson'
 
         slideHeight = int(self.slideProperties['height'])
-        annotationScalingFactor = float(self.slideProperties['openslide.level[0].downsample'])/float(self.slideProperties['openslide.level['+str(magnificationLevel)+'].downsample'])
+        annotationScalingFactor = float(self.slideProperties['openslide.level[0].downsample'])/float(self.slideProperties['openslide.level['+str(level)+'].downsample'])
         print("Scale: "+str(annotationScalingFactor))
 
         classMultiPolys = {}
@@ -583,8 +713,16 @@ class Slide:
     # SEGMENTATION
     # ADAM EXPERIMENTAL
     def getAnnotationTileMask(self, tileAddress, maskClass, verbose=False):
-        """
-        Returns a PIL image
+        """A function that returns the PIL Image of the binary mask of a
+        tile-annotation class overlap.
+
+        Args:
+            tileAddress (tuple of ints): the (x, y) coordinate touple of the desired tile to get the annotation mask for.
+            maskClass (string): the class to extract a segmentation mask for.
+            verbose (Boolean, optional): whether to output verbose messages. Default is False.
+
+        Example:
+            pathml_slide.getAnnotationTileMask((15,20), "metastasis")
         """
 
         if not hasattr(self, 'tileDictionary'):
@@ -1290,7 +1428,7 @@ class Slide:
 
 
     # ADAM EXPERIMENTAL
-    def plotTissueDetectionMap(self, fileName=False, folder=os.getcwd()):
+    def visualizeTissueDetection(self, fileName=False, folder=os.getcwd()):
         """
         Blue is tissue, green is background, red is artifact
         """
@@ -1309,7 +1447,19 @@ class Slide:
             id = self.slideFileName
 
         map = resize(self.rawTissueDetectionMap, np.zeros([self.numTilesInY, self.numTilesInX]).shape, order=0, anti_aliasing=False)
-        plt.imsave(os.path.join(folder, id+'.png'), map)
+        #plt.imsave(os.path.join(folder, id+'.png'), map)
+
+        plt.figure()
+        #plt.imshow(resize(ourNewImg, classMask.shape))
+        plt.imshow(map, cmap=mpl.colors.ListedColormap(['blue', 'yellow', 'red']))
+        #plt.imshow(foregroundMask, cmap='plasma', alpha=0.3, vmin=0, vmax=1.0)
+        #plt.colorbar()
+        plt.title(id+"\n"+'deep tissue detection')
+        if folder:
+            #os.makedirs(os.path.join(folder, self.slideFileName), exist_okay=True)
+            plt.savefig(os.path.join(folder, id+"_tissuedetection.png"))
+        else:
+            plt.show(block=False)
 
     # ADAM EXPERIMENTAL
     def inferClassifier(self, trainedModel, classNames, dataTransforms=None, batchSize=30, numWorkers=16, tissueLevelThreshold=False, foregroundLevelThreshold=False):
@@ -1414,6 +1564,58 @@ class Slide:
             plt.savefig(os.path.join(folder, self.slideFileName, self.slideFileName+"_"+classToVisualize+".png"))
         else:
             plt.show(block=False)
+
+    def visualizeThumbnail(self, folder=False, level=4):
+        ourNewImg = self.thumbnail(level=level)
+        classMask = np.zeros((self.numTilesInX, self.numTilesInY)[::-1])
+
+        plt.figure()
+        plt.imshow(resize(ourNewImg, classMask.shape))
+        plt.title(self.slideFileName)
+        if folder:
+            os.makedirs(os.path.join(folder, self.slideFileName), exist_okay=True)
+            plt.savefig(os.path.join(folder, self.slideFileName, self.slideFileName+"_thumbnail.png"))
+        else:
+            plt.show(block=False)
+
+
+
+
+    def visualizeForeground(self, folder=False, method=False, colors=['#04F900', '#0000FE']):
+        """
+        Create map of foreground
+        colors must be a list of two colors with the background color first and the foreground color seconds
+        """
+
+        if not hasattr(self, 'tileDictionary'):
+            raise PermissionError(
+                'setTileProperties must be called before inferring a classifier')
+        if 'foreground' not in self.tileDictionary[list(self.tileDictionary.keys())[0]]:
+            raise PermissionError('Foreground detection must be performed with detectForeground() before tissueLevelThreshold can be defined')
+
+        foregroundMask = np.zeros((self.numTilesInX, self.numTilesInY)[::-1])
+
+        for tileAddress, tileEntry in self.tileDictionary.items():
+            foregroundMask[tileAddress[1],tileAddress[0]] = tileEntry['foreground']
+
+        plt.figure()
+        #plt.imshow(resize(ourNewImg, classMask.shape))
+        plt.imshow(foregroundMask, cmap=mpl.colors.ListedColormap(colors))
+        #plt.imshow(foregroundMask, cmap='plasma', alpha=0.3, vmin=0, vmax=1.0)
+        #plt.colorbar()
+        if method:
+            plt.title(self.slideFileName+"\n"+method+' foreground')
+        else:
+            plt.title(self.slideFileName+"\n"+'Foreground')
+        if folder:
+            os.makedirs(os.path.join(folder, id), exist_okay=True)
+            if method:
+                plt.savefig(os.path.join(folder, id, id+"_"+method+"_foregrounddetection.png"))
+            else:
+                plt.savefig(os.path.join(folder, id, id+"_foregrounddetection.png"))
+        else:
+            plt.show(block=False)
+
 
     def thresholdClassPredictions(self, classToThreshold, probabilityThresholds):
         if not hasattr(self, 'predictionTileAddresses'):
