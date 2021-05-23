@@ -322,8 +322,30 @@ class Slide:
                     'Tile address (' + str(tileAddress[0]) + ', ' + str(tileAddress[1]) + ') is out of bounds')
 
 
-    def saveTileDictionary(self, fileName, folder=os.getcwd()):
-        pickle.dump(self.tileDictionary, open(os.path.join(folder, fileName)+'.pml', 'wb'))
+    def saveTileDictionary(self, fileName=False, folder=os.getcwd()):
+        """A function to save just the tileDictionary attribute of a Slide
+        object into a pickled file. Note that these pickled files cannot be used
+        as an input when initializing a Slide object; please use saveSelf()
+        instead.
+
+        Args:
+            fileName (string, optional): the name of the file where the pickled tile dictionary (a dict) will be stored, excluding an extension. Default is the slideFileName attribute.
+            folder (string, optional): the path to the directory where the pickled tile dictionary will be saved. Default is the current working directory.
+
+        Example:
+            pathml_slide.saveTileDictionary(folder="path/to/pathml_tile_dictionaries")
+        """
+
+        # get case ID
+        if fileName:
+            if type(fileName) == str:
+                id = fileName
+            else:
+                raise ValueError('fileName must be a string')
+        else:
+            id = self.slideFileName
+
+        pickle.dump(self.tileDictionary, open(os.path.join(folder, id)+'.pml', 'wb'))
 
     def saveSelf(self, fileName=False, folder=os.getcwd()):
         """A function to save a pickled PathML Slide object to a .pml file for re-use later
@@ -331,7 +353,7 @@ class Slide:
         This function should be re-run after each major step in an analysis on a Slide.
 
         Args:
-            fileName (string): the name of the pickled file excluding an extension
+            fileName (string, optional): the name of the file where the pickled Slide will be stored, excluding an extension. Default is the slideFileName attribute.
             folder (string, optional): the path to the directory where the pickled Slide will be saved. Default is the current working directory.
 
         Example:
@@ -858,18 +880,26 @@ class Slide:
     # ADAM EXPERIMENTAL
     def extractAnnotationTiles(self, outputDir, tileDirName=False, numTilesToExtractPerClass='all', classesToExtract=False, otherClassNames=False,
         extractSegmentationMasks=False, tileAnnotationOverlapThreshold=0.5, foregroundLevelThreshold=False, tissueLevelThreshold=False,
-        returnTileStats=True, returnOnlyNumTilesFromThisClass=False, seed=False,):
-        """
-        Extract tiles that overlap with annotations into directory structure amenable to torch.utils.data.ConcatDataset
-        outputDir is expected to be of the form: '/path/to/tiles'
-        numTilesToExtractPerClass is expected to be positive integer, a dictionary with class names as keys and positive integers as values, or 'all' to extract all suitable tiles for each class
-        classesToExtract defaults to extracting all classes found in the annotations, but if defined, must be a string or a list of strings.
-        otherClassNames, if defined, creates an empty class directory alongside the unannotated class directory for each class name in the list (or string) for torch ImageFolder purposes
-        tissueLevelThreshold, if defined, only considers tiles with a 0 to 1 tissueLevel probability greater than or equal to the set value
-        foregroundLevelThreshold, if defined, only considers tiles with a 0-100 foregroundLevel value less or equal to than the set value (0 is a black tile, 100 is a white tile)
-        tileAnnotationOverlapThreshold is expected to be a number greater than 0 and less than or equal to 1, or a dictionary of such values, with a key for each class to extract
-        returnTileStats returns the 0-1 normalized sum of channel values, the sum of the squares of channel values, and the number of tiles extracted for use in global mean and variance computation
-        returnOnlyNumTilesFromThisClass causes only the number of suitable tiles for the specified class in the slide; no tile images are created
+        returnTileStats=True, returnOnlyNumTilesFromThisClass=False, seed=False):
+        """A function to extract tiles that overlap with annotations into
+        directory structure amenable to torch.utils.data.ConcatDataset.
+
+        Args:
+            outputDir (string): the path to the directory where the tile directory will be stored
+            tileDirName (string, optional): what to call the hightest level tile directory that will be created. Default is 'tiles'
+            numTilesToExtractPerClass (dict or int or 'all', optional): expected to be positive integer, a dictionary with class names as keys and positive integers as values, or 'all' to extract all suitable tiles for each class. Default is 'all'.
+            classesToExtract (string or list of strings, optional): defaults to extracting all classes found in the annotations, but if defined, must be a string or a list of strings of class names.
+            otherClassNames (string or list of strings, optional): if defined, creates an empty class directory alongside the unannotated class directory for each class name in the list (or string) for torch ImageFolder purposes
+            extractSegmentationMasks (Boolean, optional): whether to extract a 'masks' directory that is exactly parallel to the 'tiles' directory, and contains binary segmentation mask tiles for each class desired. Default is False.
+            tileAnnotationOverlapThreshold (float, optional): a number greater than 0 and less than or equal to 1, or a dictionary of such values, with a key for each class to extract. The numbers specify the minimum fraction of a tile's area that overlaps a given class's annotations for it to be extracted. Default is 0.5.
+            foregroundLevelThreshold (Boolean, optional): if defined, only extracts tiles with a 0-100 foregroundLevel value less or equal to than the set value (0 is a black tile, 100 is a white tile). Default is False.
+            tissueLevelThreshold (Boolean, optional): if defined, only extracts tiles with a 0 to 1 tissueLevel probability greater than or equal to the set value. Default is False.
+            returnTileStats (Boolean, optional): whether to return the 0-1 normalized sum of channel values, the sum of the squares of channel values, and the number of tiles extracted for use in global mean and variance computation. Default is True.
+            returnOnlyNumTilesFromThisClass (string, optional): causes only the number of suitable tiles for the specified class in the slide; no tile images are created if a string is provided. Default is False.
+            seed (int, optional): the random seed to use for reproducible anayses. Default is not to use a seed when randomly selecting tiles.
+
+        Example:
+            channel_data = pathml_slide.extractAnnotationTiles("/path/to/directory", numTilesToExtractPerClass=200, tissueLevelThreshold=0.995)
         """
 
         if not hasattr(self, 'tileDictionary'):
@@ -1144,14 +1174,23 @@ class Slide:
     # ADAM EXPERIMENTAL
     def extractRandomUnannotatedTiles(self, outputDir, tileDirName=False, numTilesToExtract=50, unannotatedClassName='unannotated', otherClassNames=False,
         extractSegmentationMasks=False, foregroundLevelThreshold=False, tissueLevelThreshold=False, returnTileStats=True, seed=False):
-        """
-        Extract randomly selected tiles that don't overlap any annotations into directory structure amenable to torch.utils.data.ConcatDataset
-        outputDir is expected to be of the form: '/path/to/tiles'
-        otherClassNames, if defined, creates an empty class directory alongside the unannotated class directory for each class name in the list (or string) for torch ImageFolder purposes
-        tissueLevelThreshold, if defined, only considers tiles with a 0 to 1 tissueLevel probability greater than or equal to the set value
-        foregroundLevelThreshold, if defined, only considers tiles with a 0-100 foregroundLevel value less or equal to than the set value (0 is a black tile, 100 is a white tile)
-        returnTileStats returns the 0-1 normalized sum of channel values, the sum of the squares of channel values, and the number of tiles extracted for use in global mean and variance computation
-        Note: all segmentation masks extracted for this class will obviously be blank
+        """A function to extract randomly selected tiles that don't overlap any
+        annotations into directory structure amenable to torch.utils.data.ConcatDataset
+
+        Args:
+            outputDir (string): the path to the directory where the tile directory will be stored
+            tileDirName (string, optional): what to call the hightest level tile directory that will be created. Default is 'tiles'
+            numTilesToExtract (int, optional): the number of random unannotated tiles to extract. Default is 50.
+            unannotatedClassName (string, optional): the name that the unannotated "class" directory should be called. Default is "unannotated".
+            otherClassNames (string or list of strings, optional): if defined, creates an empty class directory alongside the unannotated class directory for each class name in the list (or string) for torch ImageFolder purposes
+            extractSegmentationMasks (Boolean, optional): whether to extract a 'masks' directory that is exactly parallel to the 'tiles' directory, and contains binary segmentation mask tiles for each class desired (these tiles will of course all be entirely black). Default is False.
+            foregroundLevelThreshold (Boolean, optional): if defined, only extracts tiles with a 0-100 foregroundLevel value less or equal to than the set value (0 is a black tile, 100 is a white tile). Default is False.
+            tissueLevelThreshold (Boolean, optional): if defined, only extracts tiles with a 0 to 1 tissueLevel probability greater than or equal to the set value. Default is False.
+            returnTileStats (Boolean, optional): whether to return the 0-1 normalized sum of channel values, the sum of the squares of channel values, and the number of tiles extracted for use in global mean and variance computation. Default is True.
+            seed (int, optional): the random seed to use for reproducible anayses. Default is not to use a seed when randomly selecting tiles.
+
+        Example:
+            channel_data = pathml_slide.extractRandomUnannotatedTiles("/path/to/directory", numTilesToExtract=200, unannotatedClassName="non_metastasis", tissueLevelThreshold=0.995)
         """
 
         if not hasattr(self, 'tileDictionary'):
@@ -1372,10 +1411,27 @@ class Slide:
 
     # ADAM EXPERIMENTAL
     def detectTissue(self, tissueDetectionLevel=1, tissueDetectionTileSize=512, tissueDetectionTileOverlap=0, tissueDetectionUpsampleFactor=4, batchSize=20, overwriteExistingTissueDetection=False, modelStateDictPath='../pathml/pathml/models/deep-tissue-detector_densenet_state-dict.pt', architecture='densenet'):
+        """A function to apply PathML's built-in deep tissue detector to assign
+        artifact, background, and tissue probabilities that sum to one to each tile
+        in the tile dictionary. The raw tissue detection map for a WSI is saved into
+        a Slide attribute called rawTissueDetectionMap in the Slide which can be loaded
+        into a new Slide object to save inference time with detectTissueFromRawTissueDetectionMap().
+        For this reason calling saveSelf() after detectTissue() finishes is recommended.
+
+        Args:
+            tissueDetectionLevel (int, optional): the level of the WSI pyramid at which to perform the tissue detection. Default is 1.
+            tissueDetectionTileSize (int, optional): the edge length in pixels of the tiles that the deep tissue detector will be inferred on. Default is 512.
+            tissueDetectionTileOverlap (float, optional): the fraction of a tile's edge length that overlaps the left, right, above, and below tiles. Default is 0.
+            tissueDetectionUpsampleFactor (int, optional): the factor why which the WSI should be upsampled when performing tissue detection. Default is 4.
+            batchSize (int, optional): the number of tiles per minibatch when inferring on the deep tissue detector. Default is 20.
+            overwriteExistingTissueDetection (Boolean, optional): whether to overwrite any existing deep tissue detector predictions if they are already present in the tile dictionary. Default is False.
+            modelStateDictPath (string, optional): the path to the state dictionary of the deep tissue detector; it must be a 3-class classifier, with the class order as follows: background, artifact, tissue. Default is the path to the state dict of the deep tissue detector build into PathML.
+            architecture (string, optional): the name of the architecture that the state dict belongs to. Currently supported architectures include resnet18, inceptionv3, vgg16, vgg16_bn, vgg19, vgg19_bn, densenet, alexnet, and squeezenet. Default is "densenet", which is the architecture of PathML's built-in deep tissue detector.
+
+        Example:
+            pathml_slide.detectTissue()
         """
-        modelStateDictPath is the path to the state dictionary of the deep tissue detector; it must be a 3-class classifier, with the class order as follows: background, artifact, tissue
-        architecture is the name of the architecture that the state dict belongs to. Currently supported architectures include resnet18, inceptionv3, vgg16, vgg16_bn, vgg19, vgg19_bn, densenet, alexnet, and squeezenet
-        """
+
         if not hasattr(self, 'tileDictionary'):
             raise PermissionError(
                 'setTileProperties must be called before applying tissue detector')
@@ -1409,6 +1465,17 @@ class Slide:
             self.tileDictionary[address].update({'tissueLevel': predictionMap1res[address[1], address[0]][2]})
 
     def detectTissueFromRawTissueDetectionMap(self, rawTissueDetectionMap, overwriteExistingTissueDetection=False):
+        """Function to load a raw tissue detection map from a previous application
+        of detectTissue() to a slide.
+
+        Args:
+            rawTissueDetectionMap (numpy array): the raw tissue detection map numpy array saved in a Slide object's rawTissueDetectionMap attribute.
+            overwriteExistingTissueDetection (Boolean, optional): whether to overwrite any existing deep tissue detection predictions in the tile dictionary if they are present. Default is False.
+
+        Example:
+            pathml_slide.detectTissueFromRawTissueDetectionMap(Slide("/path/to/old_pathml_slide.pml")).rawTissueDetectionMap)
+        """
+
         if not hasattr(self, 'tileDictionary'):
             raise PermissionError(
                 'setTileProperties must be called before applying tissue detector')
@@ -1429,9 +1496,19 @@ class Slide:
 
     # ADAM EXPERIMENTAL
     def visualizeTissueDetection(self, fileName=False, folder=os.getcwd()):
+        """A function to generate a 3-color tissue detection map showing where
+        on a WSI the deep tissue detector applied with detectTissue() artifact
+        was found (red), where background was found (green), and where tissue
+        was found (blue).
+
+        Args:
+            fileName (string, optional): the name of the file where the deep tissue detection inference map image will be saved, excluding an extension
+            folder (string, optional): the path to the directory where the deep tissue detection inference map image will be saved. Default is the current working directory.
+
+        Example:
+            pathml_slide.visualizeTissueDetection(folder="/path/where/tissue_detection_map_will_be_saved")
         """
-        Blue is tissue, green is background, red is artifact
-        """
+
         if not hasattr(self, 'tileDictionary'):
             raise PermissionError('setTileProperties must be called before saving self')
         if not hasattr(self, 'rawTissueDetectionMap'):
@@ -1462,10 +1539,30 @@ class Slide:
             plt.show(block=False)
 
     # ADAM EXPERIMENTAL
-    def inferClassifier(self, trainedModel, classNames, dataTransforms=None, batchSize=30, numWorkers=16, tissueLevelThreshold=False, foregroundLevelThreshold=False):
+    def inferClassifier(self, trainedModel, classNames, dataTransforms=None, batchSize=30, numWorkers=16, foregroundLevelThreshold=False, tissueLevelThreshold=False):
+        """A function to infer a trained classifier on a Slide object using
+        PyTorch.
+
+        Args:
+            trainedModel (torchvision.models): A PyTorch torchvision model that has been trained for the classification task desired for inference.
+            classNames (list of strings): an alphabetized list of class names.
+            dataTransforms (torchvision.transforms.Compose): a PyTorch torchvision.Compose object with the desired data transformations.
+            batchSize (int, optional): the number of tiles to use in each inference minibatch.
+            numWorkers (int, optional): the number of workers to use when inferring the model on the WSI
+            foregroundLevelThreshold (Boolean, optional): if defined, only infers trainedModel tiles with a 0-100 foregroundLevel value less or equal to than the set value (0 is a black tile, 100 is a white tile). Default is False.
+            tissueLevelThreshold (Boolean, optional): if defined, only infers trainedModel on tiles with a 0 to 1 tissueLevel probability greater than or equal to the set value. Default is False.
+
+        Example:
+            import torchvision
+            trainedModel = torchvision.models.vgg19_bn(pretrained=False)
+            dataTransforms = torchvision.transforms.Compose([
+                transforms.Resize(patch_size),
+                transforms.ToTensor(),
+                transforms.Normalize(global_channel_means.tolist(), global_channel_stds.tolist())])
+            pathml_slide.inferClassifier(trainedModel, classNames=['metastasis', 'non_metastasis'],
+                                            dataTransforms=dataTransforms, tissueLevelThreshold=0.995)
         """
-        classNames is an alphabetized list of class names
-        """
+
         if not hasattr(self, 'tileDictionary'):
             raise PermissionError(
                 'setTileProperties must be called before inferring a classifier')
@@ -1518,6 +1615,17 @@ class Slide:
             raise Warning('No suitable tiles found at current tissueLevelThreshold and foregroundLevelThreshold')
 
     def suitableTileAddresses(self, tissueLevelThreshold=False, foregroundLevelThreshold=False):
+        """A function that returns a list of the tile address tuples that meet
+        set tissue and foreground thresholds.
+
+        Args:
+            foregroundLevelThreshold (Boolean, optional): if defined, only includes the tile address of tiles with a 0-100 foregroundLevel value less or equal to than the set value (0 is a black tile, 100 is a white tile). Default is False.
+            tissueLevelThreshold (Boolean, optional): if defined, only includes the tile addresses of tiles with a 0 to 1 tissueLevel probability greater than or equal to the set value. Default is False.
+
+        Example:
+            suitable_tile_addresses = pathml_slide.suitableTileAddresses(tissueLevelThreshold=0.995, foregroundLevelThreshold=88)
+        """
+
         suitableTileAddresses = []
         for tA in self.iterateTiles():
             if tissueLevelThreshold and foregroundLevelThreshold:
@@ -1534,9 +1642,18 @@ class Slide:
         return suitableTileAddresses
 
     def visualizeInference(self, classToVisualize, folder=False, level=4):
+        """A function to create an inference map image of a Slide after running
+        inferClassifier() on it.
+
+        Args:
+            classToVisualize (string): the class to make an inference map image for. This class must be present in the tile dictionary from inferClassifier().
+            folder (string, optional): the path to the directory where the map will be saved; if it is not defined, then the map will only be shown and not saved.
+            level (int, optional): the level of the WSI pyramid to make the inference map image from.
+
+        Example:
+            pathml_slide.visualizeInference("metastasis", folder="path/to/folder")
         """
-        folder is the path to the directory where the map will be saved; if it is not defined, then the map will only be shown and not saved
-        """
+
         ourNewImg = self.thumbnail(level=level)
         classMask = np.zeros((self.numTilesInX, self.numTilesInY)[::-1])
 
@@ -1566,6 +1683,17 @@ class Slide:
             plt.show(block=False)
 
     def visualizeThumbnail(self, folder=False, level=4):
+        """A function to create a low-resolution image of the WSI stored in a
+        Slide.
+
+        Args:
+            folder (string, optional): the path to the directory where the thumbnail image will be saved; if it is not defined, then the thumbnail image will only be shown with matplotlib.pyplot and not saved.
+            level (int, optional): the level of the WSI pyramid to make the thumbnail image from. Higher numbers will result in a lower resolution thumbnail. Default is 4.
+
+        Example:
+            pathml_slide.visualizeThumbnail(folder="path/to/folder")
+        """
+
         ourNewImg = self.thumbnail(level=level)
         classMask = np.zeros((self.numTilesInX, self.numTilesInY)[::-1])
 
@@ -1578,13 +1706,17 @@ class Slide:
         else:
             plt.show(block=False)
 
-
-
-
     def visualizeForeground(self, folder=False, method=False, colors=['#04F900', '#0000FE']):
-        """
-        Create map of foreground
-        colors must be a list of two colors with the background color first and the foreground color seconds
+        """A function to create a map image of a Slide after running
+        detectForeground() on it.
+
+        Args:
+            folder (string, optional): the path to the directory where the map will be saved; if it is not defined, then the map will only be shown and not saved.
+            method (string, optional): the name of the foreground detection method used. This will only be used to name the map image file. Default is not to include the method name in the file.
+            colors (list, optional): a list of length two containing the color for the background followed by the color for the foreground in the map image. Colors must be defined for use in matplotlib.imshow's cmap argument. Default is a light green (#04F900) for background and a dark blue (#0000FE) for foreground.
+
+        Example:
+            pathml_slide.visualizeForeground(folder="path/to/folder", method="otsu")
         """
 
         if not hasattr(self, 'tileDictionary'):
@@ -1616,8 +1748,16 @@ class Slide:
         else:
             plt.show(block=False)
 
-
     def thresholdClassPredictions(self, classToThreshold, probabilityThresholds):
+        """A function to return the number of tiles at or above one or a list of
+        probability thresholds for a classification class added to each tile in
+        the tile dictionary by iferClassifier().
+
+        Args:
+            classToThreshold (string): the class to threshold the tiles by. The class must be already present in the tile dictionary from inferClassifier().
+            probabilityThresholds (float or list of floats): the probability threshold or list of probability thresholds (in the range 0 to 1) to check. If a float is provided, just that probability threshold will be used, and an int of the number of tiles at or above that threshold will be returned. If a list of floats is provided, a list of ints of the number of tiles at or above each of those thresholds in respective order to the inputted threshold list will be returned.
+        """
+
         if not hasattr(self, 'predictionTileAddresses'):
             foundPrediction = False
             predictionTileAddresses = []
@@ -1636,7 +1776,6 @@ class Slide:
             pT = probabilityThresholds
         else:
             raise ValueError('probabilityThresholds must be an int, float, or list of ints or floats')
-
 
         numTilesAboveProbThreshList = []
         for probabilityThreshold in pT:
