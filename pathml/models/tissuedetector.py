@@ -1,4 +1,5 @@
 import torch
+import torch.nn as nn
 from torchvision import transforms, models
 
 
@@ -17,36 +18,36 @@ def tissueDetector(modelStateDictPath='../pathml/pathml/models/deep-tissue-detec
     ])
 
     # For now required PyTorch housekeeping
-    if which_cnn == "resnet18":
+    if architecture == "resnet18":
         model_ft = models.resnet18(pretrained=False)
         model_ft.fc = nn.Linear(512, 3)
-    elif which_cnn == "inceptionv3":
+    elif architecture == "inceptionv3":
         model_ft = models.inception_v3(pretrained=False)
         num_ftrs = model_ft.fc.in_features
         model_ft.AuxLogits.fc = nn.Linear(768, 3)
         model_ft.fc = nn.Linear(num_ftrs, 3)
-    elif which_cnn == "vgg16":
+    elif architecture == "vgg16":
         model_ft = models.vgg16(pretrained=False)
         model_ft.classifier[6] = nn.Linear(4096, 3)
-    elif which_cnn == "vgg16_bn":
+    elif architecture == "vgg16_bn":
         model_ft = models.vgg16_bn(pretrained=False)
         num_ftrs = model_ft.classifier[6].in_features
         model_ft.classifier[6] = nn.Linear(num_ftrs, 3)
-    elif which_cnn == 'vgg19':
+    elif architecture == 'vgg19':
         model_ft = models.vgg19(pretrained=False)
         num_ftrs = model_ft.classifier[6].in_features
         model_ft.classifier[6] = nn.Linear(num_ftrs, 3)
-    elif which_cnn == 'vgg19_bn':
+    elif architecture == 'vgg19_bn':
         model_ft = models.vgg19_bn(pretrained=False)
         num_ftrs = model_ft.classifier[6].in_features
         model_ft.classifier[6] = nn.Linear(num_ftrs, 3)
-    elif which_cnn == "densenet":
+    elif architecture == "densenet":
         model_ft = models.densenet121(pretrained=False)
         model_ft.classifier = nn.Linear(1024, 3)
-    elif which_cnn == "alexnet":
+    elif architecture == "alexnet":
         model_ft = models.alexnet(pretrained=False)
         model_ft.classifier[6] = nn.Linear(4096, 3)
-    elif which_cnn == "squeezenet":
+    elif architecture == "squeezenet":
         model_ft = models.squeezenet1_1(pretrained=False)
         model_ft.classifier[1] = nn.Conv2d(
             512, 3, kernel_size=(1, 1), stride=(1, 1))

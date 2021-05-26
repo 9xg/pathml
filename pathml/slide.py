@@ -1172,7 +1172,7 @@ class Slide:
             # automatically detect whether it is an asap xml or qupath geojson (and if not throw error)
 
     # ADAM EXPERIMENTAL
-    def extractRandomUnannotatedTiles(self, outputDir, tileDirName=False, numTilesToExtract=50, unannotatedClassName='unannotated', otherClassNames=False,
+    def extractRandomUnannotatedTiles(self, outputDir, tileDirName=False, numTilesToExtract=100, unannotatedClassName='unannotated', otherClassNames=False,
         extractSegmentationMasks=False, foregroundLevelThreshold=False, tissueLevelThreshold=False, returnTileStats=True, seed=False):
         """A function to extract randomly selected tiles that don't overlap any
         annotations into directory structure amenable to torch.utils.data.ConcatDataset
