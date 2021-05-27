@@ -7,6 +7,7 @@ import numpy as np
 import pyvips as pv
 from PIL import Image, ImageDraw
 from joblib import Parallel, delayed
+from sklearn.metrics import accuracy_score, balanced_accuracy_score, f1_score, precision_score, recall_score
 from skimage.transform import downscale_local_mean
 from skimage.filters import threshold_triangle, threshold_otsu
 from skimage.morphology import binary_dilation, remove_small_objects
@@ -1608,7 +1609,7 @@ class Slide:
                 for i, pred in enumerate(preds):
                     prediction[classNames[i]] = pred
                 self.appendTag(tileAddress, 'inferencePrediction', prediction)
-                predictionTileAddresses.append()
+                predictionTileAddresses.append(tileAddress)
         if len(predictionTileAddresses) > 0:
             self.predictionTileAddresses = predictionTileAddresses
         else:
@@ -1748,10 +1749,10 @@ class Slide:
         else:
             plt.show(block=False)
 
-    def thresholdClassPredictions(self, classToThreshold, probabilityThresholds):
+    def numTilesAboveClassPredictionThreshold(self, classToThreshold, probabilityThresholds):
         """A function to return the number of tiles at or above one or a list of
         probability thresholds for a classification class added to each tile in
-        the tile dictionary by iferClassifier().
+        the tile dictionary by inferClassifier().
 
         Args:
             classToThreshold (string): the class to threshold the tiles by. The class must be already present in the tile dictionary from inferClassifier().
@@ -1782,8 +1783,8 @@ class Slide:
             numTilesAboveProbThresh = 0
             for addr in self.predictionTileAddresses:
                 if classToThreshold not in self.tileDictionary[addr]['inferencePrediction']:
-                    raise ValueError(classToVisualize+' not in inferencePrediction')
-                if self.tileDictionary[addr]['inferencePrediction'][classToThreshold] > probabilityThreshold:
+                    raise ValueError(classToVisualize+' not in inferencePrediction at tile '+str(addr))
+                if self.tileDictionary[addr]['inferencePrediction'][classToThreshold] >= probabilityThreshold:
                     numTilesAboveProbThresh = numTilesAboveProbThresh + 1
             numTilesAboveProbThreshList.append(numTilesAboveProbThresh)
 
@@ -1791,3 +1792,87 @@ class Slide:
             return numTilesAboveProbThreshList
         else:
             return numTilesAboveProbThreshList[0]
+
+    def classMetricAtThreshold(self, classToThreshold, probabilityThresholds, tileAnnotationOverlapThreshold=0.5, metric="accuracy"):
+        """A function to return the tile-level metric of a class probability
+        threshold (or list of thresholds) compared to the ground truth, where a
+        tile with ground truth annotation overlap greater than or equal to
+        tileAnnotationOverlapThreshold is considered to be ground truth positive
+        for that class. Ground truth annotations are expected to have been added
+        to each tile in the tile dictionary by addAnnotations(). Class probability
+        labels are expected to have been added to each tile in the tile dictionary
+        by inferClassifier(). Metrics include 'accuracy', 'balanced_accuracy',
+        'f1', 'precision', or 'recall'.
+
+        Args:
+            classToThreshold (string): the class to threshold the tiles by. The class must be already present in the tile dictionary from inferClassifier().
+            probabilityThresholds (float or list of floats): the probability threshold or list of probability thresholds (in the range 0 to 1) to check. If a float is provided, just that probability threshold will be used, and a float of the accuracy of the classifier using that threshold as when the model considered a tile positive for the class will be returned. If a list of floats is provided, a list of floats of accuracies for those thresholds will be returned in respective order the inputted threshold list will be returned.
+            tileAnnotationOverlapThreshold (float, optional): the class annotation overlap threshold at or above which a tile is considered ground truth positive for that class. Default is 0.5.
+            metric (string, optional): which metric to compute. Options are 'accuracy', 'balanced_accuracy', 'f1', 'precision', or 'recall'. Default is 'accuracy'.
+        """
+
+        if not hasattr(self, 'predictionTileAddresses'):
+            foundPrediction = False
+            predictionTileAddresses = []
+            for tileAddress, tileEntry in self.tileDictionary.items():
+                if 'inferencePrediction' in tileEntry:
+                    predictionTileAddresses.append(tileAddress)
+                    foundPrediction = True
+            if foundPrediction:
+                self.predictionTileAddresses = predictionTileAddresses
+            else:
+                raise ValueError('No predictions found in slide. Use inferClassifier() to generate them.')
+
+        if not hasattr(self, 'annotationClassMultiPolygons'):
+            print("Warning: no annotations found in Slide. All tiles in Slide will be assumed to be negative for "+classToThreshold+". Run addAnnotations() if there should be annotations in this Slide.")
+        #elif classToThreshold+'Overlap' not in self.tileDictionary[self.predictionTileAddresses[0]]:
+        #    print("Warning: no annotations found in Slide. All tiles in Slide will be assumed to be negative for "+classToThreshold+". Run addAnnotations() if there should be annotations in this Slide.")
+            #raise PermissionError(
+            #    'addAnnotations must be called before extracting tiles')
+
+        if type(probabilityThresholds) in [float, int]:
+            pT = [probabilityThresholds]
+        elif type(probabilityThresholds) == list:
+            pT = probabilityThresholds
+        else:
+            raise ValueError('probabilityThresholds must be an int, float, or list of ints or floats')
+
+        metrics = []
+
+        for probabilityThreshold in pT:
+            ground_truths = []
+            predictions = []
+            for predictionTileAddress in self.predictionTileAddresses:
+
+                if classToThreshold+'Overlap' not in self.tileDictionary[predictionTileAddress]:
+                    ground_truths.append(0)
+                    #raise ValueError(classToThreshold+' not found at tile '+str(predictionTileAddress))
+                elif self.tileDictionary[predictionTileAddress][classToThreshold+'Overlap'] >= tileAnnotationOverlapThreshold:
+                    ground_truths.append(1)
+                else:
+                    ground_truths.append(0)
+
+                if classToThreshold not in self.tileDictionary[predictionTileAddress]['inferencePrediction']:
+                    raise ValueError(classToVisualize+' not in inferencePrediction at tile '+str(predictionTileAddress))
+                if self.tileDictionary[predictionTileAddress]['inferencePrediction'][classToThreshold] >= probabilityThreshold:
+                    predictions.append(1)
+                else:
+                    predictions.append(0)
+
+            if metric == "accuracy":
+                metrics.append(accuracy_score(ground_truths, predictions))
+            elif metric == "balanced_accuracy":
+                metrics.append(balanced_accuracy_score(ground_truths, predictions))
+            elif metric == "f1":
+                metrics.append(f1_score(ground_truths, predictions))
+            elif metric == "precision":
+                metrics.append(precision_score(ground_truths, predictions))
+            elif metric == "recall":
+                metrics.append(recall_score(ground_truths, predictions))
+            else:
+                raise ValueError("metric must be one of 'accuracy', 'balanced_accuracy', 'f1', 'precision', or 'recall'")
+
+        if len(metrics) > 1:
+            return metrics
+        else:
+            return metrics[0]
