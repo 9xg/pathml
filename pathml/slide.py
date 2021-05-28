@@ -118,9 +118,12 @@ class Slide:
             raise ImportError(
                 'Whole-slide image properties could not be imported')
         else:
-            if self.slideProperties['vips-loader'] != 'openslideload':
-                raise TypeError(
-                    'This image is not compatible. Please refer to the documentation for proper installation of openslide and libvips')
+            if 'vips-loader' not in self.slideProperties:
+                print("Warning: 'vips-loader' not present in slide properties; verify independently that slide has loaded properly.")
+            else:
+                if self.slideProperties['vips-loader'] != 'openslideload':
+                    raise TypeError(
+                        'This image is not compatible. Please refer to the documentation for proper installation of openslide and libvips')
             if self.__verbose:
                 print(
                     self.__verbosePrefix + str(len(self.slideProperties)) + " properties were successfully imported")
@@ -197,14 +200,14 @@ class Slide:
     #def loadTileDictionary(self, dictionaryFilePath):
     #    pass
 
-    def detectForeground(self, threshold, level=4, overwriteExistingForegroundDetection=False):
+    def detectForeground(self, level=4, overwriteExistingForegroundDetection=False, threshold=None):
         """A function to implement traditional foreground filtering methods on the
         tile dictionary to exclude background tiles from subsequent operations.
 
         Args:
-            threshold (string): the method of foreground filtering desired. Can be set to 'otsu', 'triangle' or an int to do simple darkness thresholding at that int value (tiles with a 0-100 foregroundLevel value less or equal to than the set value are considered foreground, where 0 is a pure black tile, 100 is a pure white tile)
             level (int, optional): the level of the WSI pyramid to detect foreground on. Default is 4. Not all WSIs will have a 4th level, so alter if necessary. If memory runs out, increase the level to detect foreground with a less high resolution image.
             overwriteExistingForegroundDetection (Boolean, optional): whether to old foreground detection if it is present in the tile dictionary already. Default is False.
+            threshold (string or int): Legacy argument, avoid using. Default is to put the results of all tissue detection methods (Otsu, triangle, simple thresholding) in the tile dictionary. Can be set to 'otsu', 'triangle' or an int to do simple darkness thresholding at that int value (tiles with a 0-100 foregroundLevel value less or equal to than the set value are considered foreground, where 0 is a pure black tile, 100 is a pure white tile)
 
         Example:
             pathml_slide.detectForeground('otsu')
@@ -226,15 +229,19 @@ class Slide:
         self.lowMagSlide = rgb2lab(self.lowMagSlide[:, :, 0:3])[:, :, 0]
         downsampleFactor = self.slide.width / self.lowMagSlide.shape[1]
 
-        if threshold is 'otsu':
-            thresholdLevel = threshold_otsu(self.lowMagSlide[self.lowMagSlide < 100])  # Ignores all blank areas introduced by certain scanners
-        elif threshold is 'triangle':
-            thresholdLevel = threshold_triangle(self.lowMagSlide[self.lowMagSlide < 100])  # Ignores all blank areas introduced by certain scanners
-        elif isinstance(threshold, int) or isinstance(threshold, float):
-            thresholdLevel = threshold
-        else:
-            raise ValueError('No threshold specified for foreground segmentation')
+        #if threshold is 'otsu':
+        thresholdLevelOtsu = threshold_otsu(self.lowMagSlide[self.lowMagSlide < 100])  # Ignores all blank areas introduced by certain scanners
+        #elif threshold is 'triangle':
+        thresholdLevelTriangle = threshold_triangle(self.lowMagSlide[self.lowMagSlide < 100])  # Ignores all blank areas introduced by certain scanners
+        #elif isinstance(threshold, int) or isinstance(threshold, float):
+        #    thresholdLevel = threshold
+        #else:
+        #    raise ValueError('No threshold specified for foreground segmentation')
 
+        if type(threshold) in [int, float]:
+            thresholdIsNumeric = True
+        else:
+            thresholdIsNumeric = False
         self.foregroundTileAddresses = []
         for tileAddress in self.iterateTiles():
             tileXPos = round(self.tileDictionary[tileAddress]['x'] * (1 / downsampleFactor))
@@ -243,12 +250,37 @@ class Slide:
             tileHeight = round(self.tileDictionary[tileAddress]['height'] * (1 / downsampleFactor))
             localTmpTile = self.lowMagSlide[tileYPos:tileYPos + tileHeight, tileXPos:tileXPos + tileWidth]
             localTmpTileMean = np.nanmean(localTmpTile)
+
             self.tileDictionary[tileAddress].update({'foregroundLevel': localTmpTileMean})
-            if localTmpTileMean <= thresholdLevel:
-                self.tileDictionary[tileAddress].update({'foreground': True})
-                self.foregroundTileAddresses.append(tileAddress)
+            if threshold and thresholdIsNumeric:
+                if localTmpTileMean <= threshold:
+                    self.tileDictionary[tileAddress].update({'foreground': True})
+                    self.foregroundTileAddresses.append(tileAddress)
+                else:
+                    self.tileDictionary[tileAddress].update({'foreground': False})
+
+            if localTmpTileMean <= thresholdLevelOtsu:
+                self.tileDictionary[tileAddress].update({'foregroundOtsu': True})
+                #self.otsuForegroundTileAddresses.append(tileAddress)
+                if threshold and threshold == 'otsu':
+                    self.tileDictionary[tileAddress].update({'foreground': True})
+                    self.foregroundTileAddresses.append(tileAddress)
             else:
-                self.tileDictionary[tileAddress].update({'foreground': False})
+                self.tileDictionary[tileAddress].update({'foregroundOtsu': False})
+                if threshold and threshold == 'otsu':
+                    self.tileDictionary[tileAddress].update({'foreground': False})
+
+            if localTmpTileMean <= thresholdLevelTriangle:
+                self.tileDictionary[tileAddress].update({'foregroundTriangle': True})
+                #self.triangleForegroundTileAddresses.append(tileAddress)
+                if threshold and threshold == 'triangle':
+                    self.tileDictionary[tileAddress].update({'foreground': True})
+                    self.foregroundTileAddresses.append(tileAddress)
+            else:
+                self.tileDictionary[tileAddress].update({'foregroundTriangle': False})
+                if threshold and threshold == 'triangle':
+                    self.tileDictionary[tileAddress].update({'foreground': False})
+
         return True
 
     def getTile(self, tileAddress, writeToNumpy=False, useFetch=False):
@@ -459,27 +491,30 @@ class Slide:
             else:
                 yield key
 
-    def getTileCount(self, foregroundOnly=False, foregroundLevelThreshold=False, tissueLevelThreshold=False):
+    def getTileCount(self, foregroundLevelThreshold=False, tissueLevelThreshold=False, foregroundOnly=False):
         """A function that returns the number of tiles in the tile dictionary.
         Arguments can be used to find the number of tiles with desired
         characteristics in the tile dictionary.
 
         Args:
-            foregroundOnly (Boolean, optional): whether to return the count of only the number of foreground tiles found with detectForeground().
-            foregroundLevelThreshold (int, optional): returns the number of tiles at or above the minimum threshold specified if simple average darkness intensity foreground filtering was used (0 is a pure black tile, 100 is a pure white tile). Default is not to filter the tile count this way. detectForeground() must be run first.
+            foregroundLevelThreshold (string or int, optional): returns the number of tiles considered foreground if 'otsu' or 'triangle' is used, or the number of tiles at or above the minimum threshold specified if simple average darkness intensity foreground filtering was used (0 is a pure black tile, 100 is a pure white tile). Default is not to filter the tile count this way. detectForeground() must be run first.
             tissueLevelThreshold (float, optional): returns the number of tiles at or above the deep tissue detector tissue probability specified. Default is not to filter the tile count this way. detectTissue() must be run first.
+            foregroundOnly (Boolean, optional): Legacy argument, avoid using. Whether to return the count of only the number of foreground tiles found with detectForeground(). Only available if threshold argument was used when detectForeground() was called.
 
         Example:
             pathml_slide.getTileCount()
         """
 
-        if not hasattr(self, 'tileDictionary'):
-            raise PermissionError(
-                'setTileProperties must be called before tile counting')
-        if foregroundOnly:
-            return len(self.foregroundTileAddresses)
+        if foregroundLevelThreshold or tissueLevelThreshold:
+            return len(self.suitableTileAddresses(foregroundLevelThreshold=foregroundLevelThreshold, tissueLevelThreshold=tissueLevelThreshold))
+        elif foregroundOnly:
+            if hasattr(self, 'foregroundTileAddresses'):
+                return len(self.foregroundTileAddresses)
+            else:
+                raise PermissionError('foregroundOnly cannot be defined unless the threshold argument was used when detectForeground() was called. Note that the use of foregroundOnly is a legacy feature and not recommended.')
         else:
-            return len(self.tileDictionary)
+            return len(self.suitableTileAddresses(foregroundLevelThreshold=foregroundLevelThreshold, tissueLevelThreshold=tissueLevelThreshold))
+            #raise PermissionError('At least one of arguments foregroundLevelThreshold, tissueLevelThreshold, foregroundOnly must be defined.')
 
     # ADAM EXPERIMENTAL
     def addAnnotations(self, annotationFilePath, classesToAdd=False, negativeClass=False, level=0,
@@ -893,7 +928,7 @@ class Slide:
             otherClassNames (string or list of strings, optional): if defined, creates an empty class directory alongside the unannotated class directory for each class name in the list (or string) for torch ImageFolder purposes
             extractSegmentationMasks (Boolean, optional): whether to extract a 'masks' directory that is exactly parallel to the 'tiles' directory, and contains binary segmentation mask tiles for each class desired. Default is False.
             tileAnnotationOverlapThreshold (float, optional): a number greater than 0 and less than or equal to 1, or a dictionary of such values, with a key for each class to extract. The numbers specify the minimum fraction of a tile's area that overlaps a given class's annotations for it to be extracted. Default is 0.5.
-            foregroundLevelThreshold (Boolean, optional): if defined, only extracts tiles with a 0-100 foregroundLevel value less or equal to than the set value (0 is a black tile, 100 is a white tile). Default is False.
+            foregroundLevelThreshold (string or int or float, optional): if defined as an int, only extracts tiles with a 0-100 foregroundLevel value less or equal to than the set value (0 is a black tile, 100 is a white tile). Only includes Otsu's method-passing tiles if set to 'otsu', or triangle algorithm-passing tiles if set to 'triangle'. Default is not to filter on foreground at all.
             tissueLevelThreshold (Boolean, optional): if defined, only extracts tiles with a 0 to 1 tissueLevel probability greater than or equal to the set value. Default is False.
             returnTileStats (Boolean, optional): whether to return the 0-1 normalized sum of channel values, the sum of the squares of channel values, and the number of tiles extracted for use in global mean and variance computation. Default is True.
             returnOnlyNumTilesFromThisClass (string, optional): causes only the number of suitable tiles for the specified class in the slide; no tile images are created if a string is provided. Default is False.
@@ -971,38 +1006,45 @@ class Slide:
 
         # Get tiles to extract
         annotatedTileAddresses = {extractionClass: [] for extractionClass in extractionClasses}
-        for address in self.iterateTiles():
-            #print('address', address)
-            if (tissueLevelThreshold) and (foregroundLevelThreshold):
-                if 'tissueLevel' not in self.tileDictionary[address]:
-                    raise PermissionError('Deep tissue detection must be performed with detectTissue() before tissueLevelThreshold can be defined')
-                if 'foregroundLevel' not in self.tileDictionary[address]:
-                    raise PermissionError('Foreground detection must be performed with detectForeground() before foregroundLevelThreshold can be defined')
-                if (self.tileDictionary[address]['tissueLevel'] >= tissueLevelThreshold) and (self.tileDictionary[address]['foregroundLevel'] <= foregroundLevelThreshold):
-                    for extractionClass in extractionClasses:
-                        if self.tileDictionary[address][extractionClass+'Overlap'] >= annotationOverlapThresholdDict[extractionClass]:
-                            annotatedTileAddresses[extractionClass].append(address)
 
-            elif (tissueLevelThreshold) and (not foregroundLevelThreshold):
-                if 'tissueLevel' not in self.tileDictionary[address]:
-                    raise PermissionError('Deep tissue detection must be performed with detectTissue() before tissueLevelThreshold can be defined')
-                if self.tileDictionary[address]['tissueLevel'] >= tissueLevelThreshold: # do not extract background and artifact tiles
-                    for extractionClass in extractionClasses:
-                        if self.tileDictionary[address][extractionClass+'Overlap'] >= annotationOverlapThresholdDict[extractionClass]:
-                            annotatedTileAddresses[extractionClass].append(address)
+        suitable_tile_addresses = self.suitableTileAddresses(tissueLevelThreshold=tissueLevelThreshold, foregroundLevelThreshold=foregroundLevelThreshold)
+        for address in suitable_tile_addresses:
+            for extractionClass in extractionClasses:
+                if self.tileDictionary[address][extractionClass+'Overlap'] >= annotationOverlapThresholdDict[extractionClass]:
+                    annotatedTileAddresses[extractionClass].append(address)
 
-            elif (foregroundLevelThreshold) and (not tissueLevelThreshold):
-                if 'foregroundLevel' not in self.tileDictionary[address]:
-                    raise PermissionError('Foreground detection must be performed with detectForeground() before foregroundLevelThreshold can be defined')
-                if self.tileDictionary[address]['foregroundLevel'] <= foregroundLevelThreshold:
-                    for extractionClass in extractionClasses:
-                        if self.tileDictionary[address][extractionClass+'Overlap'] >= annotationOverlapThresholdDict[extractionClass]:
-                            annotatedTileAddresses[extractionClass].append(address)
-
-            else:
-                for extractionClass in extractionClasses:
-                    if self.tileDictionary[address][extractionClass+'Overlap'] >= annotationOverlapThresholdDict[extractionClass]:
-                        annotatedTileAddresses[extractionClass].append(address)
+        #for address in self.iterateTiles():
+        #    #print('address', address)
+        #    if (tissueLevelThreshold) and (foregroundLevelThreshold):
+        #        if 'tissueLevel' not in self.tileDictionary[address]:
+        #            raise PermissionError('Deep tissue detection must be performed with detectTissue() before tissueLevelThreshold can be defined')
+        #        if 'foregroundLevel' not in self.tileDictionary[address]:
+        #            raise PermissionError('Foreground detection must be performed with detectForeground() before foregroundLevelThreshold can be defined')
+        #        if (self.tileDictionary[address]['tissueLevel'] >= tissueLevelThreshold) and (self.tileDictionary[address]['foregroundLevel'] <= foregroundLevelThreshold):
+        #            for extractionClass in extractionClasses:
+        #                if self.tileDictionary[address][extractionClass+'Overlap'] >= annotationOverlapThresholdDict[extractionClass]:
+        #                    annotatedTileAddresses[extractionClass].append(address)
+#
+#            elif (tissueLevelThreshold) and (not foregroundLevelThreshold):
+#                if 'tissueLevel' not in self.tileDictionary[address]:
+#                    raise PermissionError('Deep tissue detection must be performed with detectTissue() before tissueLevelThreshold can be defined')
+#                if self.tileDictionary[address]['tissueLevel'] >= tissueLevelThreshold: # do not extract background and artifact tiles
+#                    for extractionClass in extractionClasses:
+#                        if self.tileDictionary[address][extractionClass+'Overlap'] >= annotationOverlapThresholdDict[extractionClass]:
+#                            annotatedTileAddresses[extractionClass].append(address)
+#
+#            elif (foregroundLevelThreshold) and (not tissueLevelThreshold):
+#                if 'foregroundLevel' not in self.tileDictionary[address]:
+#                    raise PermissionError('Foreground detection must be performed with detectForeground() before foregroundLevelThreshold can be defined')
+#                if self.tileDictionary[address]['foregroundLevel'] <= foregroundLevelThreshold:
+#                    for extractionClass in extractionClasses:
+#                        if self.tileDictionary[address][extractionClass+'Overlap'] >= annotationOverlapThresholdDict[extractionClass]:
+#                            annotatedTileAddresses[extractionClass].append(address)
+#
+#            else:
+#                for extractionClass in extractionClasses:
+#                    if self.tileDictionary[address][extractionClass+'Overlap'] >= annotationOverlapThresholdDict[extractionClass]:
+#                        annotatedTileAddresses[extractionClass].append(address)
 
         annotatedTilesToExtract = {} #{extractionClass: [] for extractionClass in extractionClasses}
         if type(numTilesToExtractPerClass) == int:
@@ -1185,7 +1227,7 @@ class Slide:
             unannotatedClassName (string, optional): the name that the unannotated "class" directory should be called. Default is "unannotated".
             otherClassNames (string or list of strings, optional): if defined, creates an empty class directory alongside the unannotated class directory for each class name in the list (or string) for torch ImageFolder purposes
             extractSegmentationMasks (Boolean, optional): whether to extract a 'masks' directory that is exactly parallel to the 'tiles' directory, and contains binary segmentation mask tiles for each class desired (these tiles will of course all be entirely black). Default is False.
-            foregroundLevelThreshold (Boolean, optional): if defined, only extracts tiles with a 0-100 foregroundLevel value less or equal to than the set value (0 is a black tile, 100 is a white tile). Default is False.
+            foregroundLevelThreshold (string or int or float, optional): if defined as an int, only extracts tiles with a 0-100 foregroundLevel value less or equal to than the set value (0 is a black tile, 100 is a white tile). Only includes Otsu's method-passing tiles if set to 'otsu', or triangle algorithm-passing tiles if set to 'triangle'. Default is not to filter on foreground at all.
             tissueLevelThreshold (Boolean, optional): if defined, only extracts tiles with a 0 to 1 tissueLevel probability greater than or equal to the set value. Default is False.
             returnTileStats (Boolean, optional): whether to return the 0-1 normalized sum of channel values, the sum of the squares of channel values, and the number of tiles extracted for use in global mean and variance computation. Default is True.
             seed (int, optional): the random seed to use for reproducible anayses. Default is not to use a seed when randomly selecting tiles.
@@ -1228,55 +1270,66 @@ class Slide:
 
         # Collect all unannotated tiles
         unannotatedTileAddresses = []
-        for address in self.iterateTiles():
 
-            if tissueLevelThreshold and foregroundLevelThreshold:
-                if 'tissueLevel' not in self.tileDictionary[address]:
-                    raise PermissionError('Deep tissue detection must be performed with detectTissue() before tissueLevelThreshold can be defined')
-                if 'foregroundLevel' not in self.tileDictionary[address]:
-                    raise PermissionError('Foreground detection must be performed with detectForeground() before tissueLevelThreshold can be defined')
-                #if foregroundLevelThreshold:
-                if (self.tileDictionary[address]['tissueLevel'] >= tissueLevelThreshold) and (self.tileDictionary[address]['foregroundLevel'] <= foregroundLevelThreshold):
-                    overlapsAnnotation = False
-                    for annotationClass in annotationClasses:
-                        if self.tileDictionary[address][annotationClass] > 0:
-                            overlapsAnnotation = True
-                            break
-                    if not overlapsAnnotation:
-                        unannotatedTileAddresses.append(address)
+        suitable_tile_addresses = self.suitableTileAddresses(tissueLevelThreshold=tissueLevelThreshold, foregroundLevelThreshold=foregroundLevelThreshold)
+        for address in suitable_tile_addresses:
+            overlapsAnnotation = False
+            for annotationClass in annotationClasses:
+                if self.tileDictionary[address][annotationClass] > 0:
+                    overlapsAnnotation = True
+                    break
+            if not overlapsAnnotation:
+                unannotatedTileAddresses.append(address)
 
-            elif (tissueLevelThreshold) and (not foregroundLevelThreshold):
-                if 'tissueLevel' not in self.tileDictionary[address]:
-                    raise PermissionError('Deep tissue detection must be performed with detectTissue() before tissueLevelThreshold can be defined')
-                if self.tileDictionary[address]['tissueLevel'] >= tissueLevelThreshold: # do not extract background and artifact tiles
-                    overlapsAnnotation = False
-                    for annotationClass in annotationClasses:
-                        if self.tileDictionary[address][annotationClass] > 0:
-                            overlapsAnnotation = True
-                            break
-                    if not overlapsAnnotation:
-                        unannotatedTileAddresses.append(address)
-
-            elif (foregroundLevelThreshold) and (not tissueLevelThreshold):
-                if 'foregroundLevel' not in self.tileDictionary[address]:
-                    raise PermissionError('Foreground detection must be performed with detectForeground() before foregroundLevelThreshold can be defined')
-                if self.tileDictionary[address]['foregroundLevel'] <= foregroundLevelThreshold:
-                    overlapsAnnotation = False
-                    for annotationClass in annotationClasses:
-                        if self.tileDictionary[address][annotationClass] > 0:
-                            overlapsAnnotation = True
-                            break
-                    if not overlapsAnnotation:
-                        unannotatedTileAddresses.append(address)
-
-            else:
-                overlapsAnnotation = False
-                for annotationClass in annotationClasses:
-                    if self.tileDictionary[address][annotationClass] > 0:
-                        overlapsAnnotation = True
-                        break
-                if not overlapsAnnotation:
-                    unannotatedTileAddresses.append(address)
+        #for address in self.iterateTiles():
+#
+#            if tissueLevelThreshold and foregroundLevelThreshold:
+#                if 'tissueLevel' not in self.tileDictionary[address]:
+#                    raise PermissionError('Deep tissue detection must be performed with detectTissue() before tissueLevelThreshold can be defined')
+#                if 'foregroundLevel' not in self.tileDictionary[address]:
+#                    raise PermissionError('Foreground detection must be performed with detectForeground() before tissueLevelThreshold can be defined')
+#                #if foregroundLevelThreshold:
+#                if (self.tileDictionary[address]['tissueLevel'] >= tissueLevelThreshold) and (self.tileDictionary[address]['foregroundLevel'] <= foregroundLevelThreshold):
+#                    overlapsAnnotation = False
+#                    for annotationClass in annotationClasses:
+#                        if self.tileDictionary[address][annotationClass] > 0:
+#                            overlapsAnnotation = True
+#                            break
+#                    if not overlapsAnnotation:
+#                        unannotatedTileAddresses.append(address)
+#
+#            elif (tissueLevelThreshold) and (not foregroundLevelThreshold):
+#                if 'tissueLevel' not in self.tileDictionary[address]:
+#                    raise PermissionError('Deep tissue detection must be performed with detectTissue() before tissueLevelThreshold can be defined')
+#                if self.tileDictionary[address]['tissueLevel'] >= tissueLevelThreshold: # do not extract background and artifact tiles
+#                    overlapsAnnotation = False
+#                    for annotationClass in annotationClasses:
+#                        if self.tileDictionary[address][annotationClass] > 0:
+#                            overlapsAnnotation = True
+#                            break
+#                    if not overlapsAnnotation:
+#                        unannotatedTileAddresses.append(address)
+#
+#            elif (foregroundLevelThreshold) and (not tissueLevelThreshold):
+#                if 'foregroundLevel' not in self.tileDictionary[address]:
+#                    raise PermissionError('Foreground detection must be performed with detectForeground() before foregroundLevelThreshold can be defined')
+#                if self.tileDictionary[address]['foregroundLevel'] <= foregroundLevelThreshold:
+#                    overlapsAnnotation = False
+#                    for annotationClass in annotationClasses:
+#                        if self.tileDictionary[address][annotationClass] > 0:
+#                            overlapsAnnotation = True
+#                            break
+#                    if not overlapsAnnotation:
+#                        unannotatedTileAddresses.append(address)
+#
+#            else:
+#                overlapsAnnotation = False
+#                for annotationClass in annotationClasses:
+#                    if self.tileDictionary[address][annotationClass] > 0:
+#                        overlapsAnnotation = True
+#                        break
+#                if not overlapsAnnotation:
+#                    unannotatedTileAddresses.append(address)
 
         if len(unannotatedTileAddresses) == 0:
             print('Warning: 0 unannotated tiles found; making no tile directories and returning zeroes')
@@ -1550,7 +1603,7 @@ class Slide:
             dataTransforms (torchvision.transforms.Compose): a PyTorch torchvision.Compose object with the desired data transformations.
             batchSize (int, optional): the number of tiles to use in each inference minibatch.
             numWorkers (int, optional): the number of workers to use when inferring the model on the WSI
-            foregroundLevelThreshold (Boolean, optional): if defined, only infers trainedModel tiles with a 0-100 foregroundLevel value less or equal to than the set value (0 is a black tile, 100 is a white tile). Default is False.
+            foregroundLevelThreshold (string or int or float, optional): if defined as an int, only infers trainedModel on tiles with a 0-100 foregroundLevel value less or equal to than the set value (0 is a black tile, 100 is a white tile). Only infers on Otsu's method-passing tiles if set to 'otsu', or triangle algorithm-passing tiles if set to 'triangle'. Default is not to filter on foreground at all.
             tissueLevelThreshold (Boolean, optional): if defined, only infers trainedModel on tiles with a 0 to 1 tissueLevel probability greater than or equal to the set value. Default is False.
 
         Example:
@@ -1617,27 +1670,56 @@ class Slide:
 
     def suitableTileAddresses(self, tissueLevelThreshold=False, foregroundLevelThreshold=False):
         """A function that returns a list of the tile address tuples that meet
-        set tissue and foreground thresholds.
+        set tissue and foreground thresholds. All addresses will be returned if
+        neither tissueLevelThreshold nor foregroundLevelThreshold is defined.
 
         Args:
-            foregroundLevelThreshold (Boolean, optional): if defined, only includes the tile address of tiles with a 0-100 foregroundLevel value less or equal to than the set value (0 is a black tile, 100 is a white tile). Default is False.
-            tissueLevelThreshold (Boolean, optional): if defined, only includes the tile addresses of tiles with a 0 to 1 tissueLevel probability greater than or equal to the set value. Default is False.
+            foregroundLevelThreshold (string or int or float, optional): if defined as an int, only includes the tile address of tiles with a 0-100 foregroundLevel value less or equal to than the set value (0 is a black tile, 100 is a white tile). Only includes Otsu's method-passing tiles if set to 'otsu', or triangle algorithm-passing tiles if set to 'triangle'. Default is not to filter on foreground at all.
+            tissueLevelThreshold (int or float, optional): if defined, only includes the tile addresses of tiles with a 0 to 1 tissueLevel probability greater than or equal to the set value. Default is False.
 
         Example:
             suitable_tile_addresses = pathml_slide.suitableTileAddresses(tissueLevelThreshold=0.995, foregroundLevelThreshold=88)
         """
 
+        if not hasattr(self, 'tileDictionary'):
+            raise PermissionError(
+                'setTileProperties must be called before tile counting')
+        if foregroundLevelThreshold:
+            if 'foregroundLevel' not in self.tileDictionary[list(self.tileDictionary.keys())[0]]:
+                raise PermissionError('Foreground detection must be performed with detectForeground() before foregroundLevelThreshold can be defined.')
+            if (foregroundLevelThreshold not in ['otsu', 'triangle']) and (type(foregroundLevelThreshold) not in [int, float]):
+                raise ValueError("foregroundLevelThreshold must be an int, a float, 'otsu', or 'triangle'")
+        if tissueLevelThreshold:
+            if 'tissueLevel' not in self.tileDictionary[list(self.tileDictionary.keys())[0]]:
+                raise PermissionError('Tissue detection must be performed with detectTissue() before tissueLevelThreshold can be defined.')
+            if type(foregroundLevelThreshold) not in [int, float]:
+                raise ValueError("tissueLevelThreshold must be an int or float")
+
         suitableTileAddresses = []
         for tA in self.iterateTiles():
             if tissueLevelThreshold and foregroundLevelThreshold:
-                if (self.tileDictionary[tA]['tissueLevel'] >= tissueLevelThreshold) and (self.tileDictionary[tA]['foregroundLevel'] <= foregroundLevelThreshold):
-                    suitableTileAddresses.append(tA)
+                if foregroundLevelThreshold == 'otsu':
+                    if (self.tileDictionary[tA]['tissueLevel'] >= tissueLevelThreshold) and self.tileDictionary[tA]['foregroundOtsu']:
+                        suitableTileAddresses.append(tA)
+                elif foregroundLevelThreshold == 'triangle':
+                    if (self.tileDictionary[tA]['tissueLevel'] >= tissueLevelThreshold) and self.tileDictionary[tA]['foregroundTriangle']:
+                        suitableTileAddresses.append(tA)
+                else:
+                    if (self.tileDictionary[tA]['tissueLevel'] >= tissueLevelThreshold) and (self.tileDictionary[tA]['foregroundLevel'] <= foregroundLevelThreshold):
+                        suitableTileAddresses.append(tA)
             elif tissueLevelThreshold and not foregroundLevelThreshold:
                 if (self.tileDictionary[tA]['tissueLevel'] >= tissueLevelThreshold):
                     suitableTileAddresses.append(tA)
             elif foregroundLevelThreshold and not tissueLevelThreshold:
-                if (self.tileDictionary[tA]['foregroundLevel'] <= foregroundLevelThreshold):
-                    suitableTileAddresses.append(tA)
+                if foregroundLevelThreshold == 'otsu':
+                    if self.tileDictionary[tA]['foregroundOtsu']:
+                        suitableTileAddresses.append(tA)
+                elif foregroundLevelThreshold == 'triangle':
+                    if self.tileDictionary[tA]['foregroundTriangle']:
+                        suitableTileAddresses.append(tA)
+                else:
+                    if (self.tileDictionary[tA]['foregroundLevel'] <= foregroundLevelThreshold):
+                        suitableTileAddresses.append(tA)
             else:
                 suitableTileAddresses.append(tA)
         return suitableTileAddresses
@@ -1707,45 +1789,53 @@ class Slide:
         else:
             plt.show(block=False)
 
-    def visualizeForeground(self, folder=False, method=False, colors=['#04F900', '#0000FE']):
+    def visualizeForeground(self, foregroundLevelThreshold, folder=False, colors=['#04F900', '#0000FE']):
         """A function to create a map image of a Slide after running
         detectForeground() on it.
 
         Args:
+            foregroundLevelThreshold (string or int, optional): applies Otsu's method to find the threshold if set to 'otsu', the triangle algorithm to find the threshold if set to 'triangle', or simply uses the tiles at or above the minimum darkness intensity threshold specified if set as an int (0 is a pure black tile, 100 is a pure white tile). Default is not to filter the tile count this way. detectForeground() must be run first.
             folder (string, optional): the path to the directory where the map will be saved; if it is not defined, then the map will only be shown and not saved.
-            method (string, optional): the name of the foreground detection method used. This will only be used to name the map image file. Default is not to include the method name in the file.
             colors (list, optional): a list of length two containing the color for the background followed by the color for the foreground in the map image. Colors must be defined for use in matplotlib.imshow's cmap argument. Default is a light green (#04F900) for background and a dark blue (#0000FE) for foreground.
 
         Example:
-            pathml_slide.visualizeForeground(folder="path/to/folder", method="otsu")
+            pathml_slide.visualizeForeground("otsu", folder="path/to/folder")
         """
 
         if not hasattr(self, 'tileDictionary'):
             raise PermissionError(
                 'setTileProperties must be called before inferring a classifier')
-        if 'foreground' not in self.tileDictionary[list(self.tileDictionary.keys())[0]]:
+        if 'foregroundLevel' not in self.tileDictionary[list(self.tileDictionary.keys())[0]]:
             raise PermissionError('Foreground detection must be performed with detectForeground() before tissueLevelThreshold can be defined')
 
         foregroundMask = np.zeros((self.numTilesInX, self.numTilesInY)[::-1])
 
         for tileAddress, tileEntry in self.tileDictionary.items():
-            foregroundMask[tileAddress[1],tileAddress[0]] = tileEntry['foreground']
+            if foregroundLevelThreshold == 'otsu':
+                foregroundMask[tileAddress[1],tileAddress[0]] = tileEntry['foregroundOtsu']
+            elif foregroundLevelThreshold == 'triangle':
+                foregroundMask[tileAddress[1],tileAddress[0]] = tileEntry['foregroundTriangle']
+            else:
+                if tileEntry['foregroundLevel'] <= foregroundLevelThreshold:
+                    foregroundMask[tileAddress[1],tileAddress[0]] = True
+                else:
+                    foregroundMask[tileAddress[1],tileAddress[0]] = False
+            #foregroundMask[tileAddress[1],tileAddress[0]] = tileEntry['foreground']
 
         plt.figure()
         #plt.imshow(resize(ourNewImg, classMask.shape))
         plt.imshow(foregroundMask, cmap=mpl.colors.ListedColormap(colors))
         #plt.imshow(foregroundMask, cmap='plasma', alpha=0.3, vmin=0, vmax=1.0)
         #plt.colorbar()
-        if method:
-            plt.title(self.slideFileName+"\n"+method+' foreground')
-        else:
-            plt.title(self.slideFileName+"\n"+'Foreground')
+        plt.title(self.slideFileName+"\n"+str(foregroundLevelThreshold)+" thresholded")
+        #else:
+        #    plt.title(self.slideFileName+"\n"+'Foreground')
         if folder:
             os.makedirs(os.path.join(folder, id), exist_okay=True)
-            if method:
-                plt.savefig(os.path.join(folder, id, id+"_"+method+"_foregrounddetection.png"))
-            else:
-                plt.savefig(os.path.join(folder, id, id+"_foregrounddetection.png"))
+            #if method:
+            plt.savefig(os.path.join(folder, id, id+str(foregroundLevelThreshold)+"_thresholded_foregrounddetection.png"))
+            #else:
+            #    plt.savefig(os.path.join(folder, id, id+"_foregrounddetection.png"))
         else:
             plt.show(block=False)
 
