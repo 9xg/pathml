@@ -210,7 +210,7 @@ class Slide:
             threshold (string or int): Legacy argument, avoid using. Default is to put the results of all tissue detection methods (Otsu, triangle, simple thresholding) in the tile dictionary. Can be set to 'otsu', 'triangle' or an int to do simple darkness thresholding at that int value (tiles with a 0-100 foregroundLevel value less or equal to than the set value are considered foreground, where 0 is a pure black tile, 100 is a pure white tile)
 
         Example:
-            pathml_slide.detectForeground('otsu')
+            pathml_slide.detectForeground()
         """
 
         if not hasattr(self, 'tileDictionary'):
@@ -1155,13 +1155,13 @@ class Slide:
                 area = self.getTile(tl)
                 if (tissueLevelThreshold) and (foregroundLevelThreshold):
                     area.write_to_file(os.path.join(outputDir, 'tiles', id, ec,
-                        id+'_'+ec+'_'+str(self.tileDictionary[tl]['x'])+'x_'+str(self.tileDictionary[tl]['y'])+'y'+'_'+str(self.tileDictionary[tl]['height'])+'tilesize_'+str(int(round(self.tileDictionary[tl]['tissueLevel']*1000)))+'tissueLevel_'+str(round(self.tileDictionary[tl]['foregroundLevel']))+'foregroundLevel.jpg'), Q=100)
+                        id+'_'+ec+'_'+str(self.tileDictionary[tl]['x'])+'x_'+str(self.tileDictionary[tl]['y'])+'y'+'_'+str(self.tileDictionary[tl]['height'])+'tilesize_'+str(int(round(self.tileDictionary[tl]['tissueLevel']*1000)))+'tissueLevel_'+str(int(round(self.tileDictionary[tl]['foregroundLevel'])))+'foregroundLevel.jpg'), Q=100)
                 elif (tissueLevelThreshold) and (not foregroundLevelThreshold):
                     area.write_to_file(os.path.join(outputDir, 'tiles', id, ec,
                         id+'_'+ec+'_'+str(self.tileDictionary[tl]['x'])+'x_'+str(self.tileDictionary[tl]['y'])+'y'+'_'+str(self.tileDictionary[tl]['height'])+'tilesize_'+str(int(round(self.tileDictionary[tl]['tissueLevel']*1000)))+'tissueLevel.jpg'), Q=100)
                 elif (not tissueLevelThreshold) and (foregroundLevelThreshold):
                     area.write_to_file(os.path.join(outputDir, 'tiles', id, ec,
-                        id+'_'+ec+'_'+str(self.tileDictionary[tl]['x'])+'x_'+str(self.tileDictionary[tl]['y'])+'y'+'_'+str(self.tileDictionary[tl]['height'])+'tilesize_'+str(round(self.tileDictionary[tl]['foregroundLevel']))+'foregroundLevel.jpg'), Q=100)
+                        id+'_'+ec+'_'+str(self.tileDictionary[tl]['x'])+'x_'+str(self.tileDictionary[tl]['y'])+'y'+'_'+str(self.tileDictionary[tl]['height'])+'tilesize_'+str(int(round(self.tileDictionary[tl]['foregroundLevel'])))+'foregroundLevel.jpg'), Q=100)
                 else:
                     area.write_to_file(os.path.join(outputDir, 'tiles', id, ec,
                         id+'_'+ec+'_'+str(self.tileDictionary[tl]['x'])+'x_'+str(self.tileDictionary[tl]['y'])+'y'+'_'+str(self.tileDictionary[tl]['height'])+'tilesize.jpg'), Q=100)
@@ -1175,10 +1175,21 @@ class Slide:
                     channel_sums = np.add(channel_sums, local_channel_sums)
                     channel_squared_sums = np.add(channel_squared_sums, local_channel_squared_sums)
 
+                # Extract segmentation masks
                 if extractSegmentationMasks:
                     mask = self.getAnnotationTileMask(tl, ec)
-                    mask.save(os.path.join(outputDir, 'masks', id, ec,
-                        id+'_'+ec+'_'+str(self.tileDictionary[tl]['x'])+'x_'+str(self.tileDictionary[tl]['y'])+'y'+'_'+str(self.tileDictionary[tl]['height'])+'tilesize_mask.gif'))
+                    if (tissueLevelThreshold) and (foregroundLevelThreshold):
+                        mask.save(os.path.join(outputDir, 'masks', id, ec,
+                            id+'_'+ec+'_'+str(self.tileDictionary[tl]['x'])+'x_'+str(self.tileDictionary[tl]['y'])+'y'+'_'+str(self.tileDictionary[tl]['height'])+'tilesize_'+str(int(round(self.tileDictionary[tl]['tissueLevel']*1000)))+'tissueLevel_'+str(int(round(self.tileDictionary[tl]['foregroundLevel'])))+'foregroundLevel_mask.gif'))
+                    elif (tissueLevelThreshold) and (not foregroundLevelThreshold):
+                        mask.save(os.path.join(outputDir, 'masks', id, ec,
+                            id+'_'+ec+'_'+str(self.tileDictionary[tl]['x'])+'x_'+str(self.tileDictionary[tl]['y'])+'y'+'_'+str(self.tileDictionary[tl]['height'])+'tilesize_'+str(int(round(self.tileDictionary[tl]['tissueLevel']*1000)))+'tissueLevel_mask.gif'))
+                    elif (not tissueLevelThreshold) and (foregroundLevelThreshold):
+                        mask.save(os.path.join(outputDir, 'masks', id, ec,
+                            id+'_'+ec+'_'+str(self.tileDictionary[tl]['x'])+'x_'+str(self.tileDictionary[tl]['y'])+'y'+'_'+str(self.tileDictionary[tl]['height'])+'tilesize_'+str(int(round(self.tileDictionary[tl]['foregroundLevel'])))+'foregroundLevel_mask.gif'))
+                    else:
+                        mask.save(os.path.join(outputDir, 'masks', id, ec,
+                            id+'_'+ec+'_'+str(self.tileDictionary[tl]['x'])+'x_'+str(self.tileDictionary[tl]['y'])+'y'+'_'+str(self.tileDictionary[tl]['height'])+'tilesize_mask.gif'))
 
         if returnOnlyNumTilesFromThisClass:
             raise Warning(returnOnlyNumTilesFromThisClass+' not found in tile dictionary')
@@ -1442,8 +1453,21 @@ class Slide:
             if extractSegmentationMasks:
                 height = self.tileDictionary[tl]['height']
                 mask = Image.new('1', (height, height), 0) # blank mask
-                mask.save(os.path.join(outputDir, 'masks', id, unannotatedClassName,
-                    id+'_'+unannotatedClassName+'_'+str(self.tileDictionary[tl]['x'])+'x_'+str(self.tileDictionary[tl]['y'])+'y'+'_'+str(self.tileDictionary[tl]['height'])+'tilesize_mask.jpg'))
+
+                if (tissueLevelThreshold) and (foregroundLevelThreshold):
+                    mask.save(os.path.join(outputDir, 'masks', id, unannotatedClassName,
+                        id+'_'+unannotatedClassName+'_'+str(self.tileDictionary[tl]['x'])+'x_'+str(self.tileDictionary[tl]['y'])+'y'+'_'+str(self.tileDictionary[tl]['height'])+'tilesize_'+str(int(round(self.tileDictionary[tl]['tissueLevel']*1000)))+'tissueLevel_'+str(int(round(self.tileDictionary[tl]['foregroundLevel'])))+'foregroundLevel_mask.gif'))
+                elif (tissueLevelThreshold) and (not foregroundLevelThreshold):
+                    mask.save(os.path.join(outputDir, 'masks', id, unannotatedClassName,
+                        id+'_'+unannotatedClassName+'_'+str(self.tileDictionary[tl]['x'])+'x_'+str(self.tileDictionary[tl]['y'])+'y'+'_'+str(self.tileDictionary[tl]['height'])+'tilesize_'+str(int(round(self.tileDictionary[tl]['tissueLevel']*1000)))+'tissueLevel_mask.gif'))
+                elif (not tissueLevelThreshold) and (foregroundLevelThreshold):
+                    mask.save(os.path.join(outputDir, 'masks', id, unannotatedClassName,
+                        id+'_'+unannotatedClassName+'_'+str(self.tileDictionary[tl]['x'])+'x_'+str(self.tileDictionary[tl]['y'])+'y'+'_'+str(self.tileDictionary[tl]['height'])+'tilesize_'+str(int(round(self.tileDictionary[tl]['foregroundLevel'])))+'foregroundLevel_mask.gif'))
+                else:
+                    mask.save(os.path.join(outputDir, 'masks', id, unannotatedClassName,
+                        id+'_'+unannotatedClassName+'_'+str(self.tileDictionary[tl]['x'])+'x_'+str(self.tileDictionary[tl]['y'])+'y'+'_'+str(self.tileDictionary[tl]['height'])+'tilesize_mask.jpg'))
+
+
 
         if returnTileStats:
             #channel_means_across_tiles = np.array(channel_means_across_tiles)
