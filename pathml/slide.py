@@ -27,13 +27,13 @@ from tqdm import tqdm
 import random
 import json
 import os
+import sys
 import pickle
+sys.path.append('/home/cri.camres.org/berman01/pathml-tutorial/Pytorch-UNet')
+from unet import UNet
 pv.cache_set_max(0)
 
 
-##
-# TODO: Slide annotations
-##
 # EXPERIMENTAL
 def unwrap_self(arg, **kwarg):
     return Slide.square_int(*arg, **kwarg)
@@ -1632,13 +1632,18 @@ class Slide:
 
         Example:
             import torchvision
-            trainedModel = torchvision.models.vgg19_bn(pretrained=False)
-            dataTransforms = torchvision.transforms.Compose([
+            class_names = ['metastasis', 'non_metastasis']
+            trained_model = torchvision.models.vgg19_bn(pretrained=False)
+            num_ftrs = trainedModel.classifier[6].in_features
+            trained_model.classifier[6] = nn.Linear(num_ftrs, len(class_names))
+            trained_model.load_state_dict(torch.load(path_to_model_state_dict))
+            data_transforms = torchvision.transforms.Compose([
                 transforms.Resize(patch_size),
                 transforms.ToTensor(),
-                transforms.Normalize(global_channel_means.tolist(), global_channel_stds.tolist())])
-            pathml_slide.inferClassifier(trainedModel, classNames=['metastasis', 'non_metastasis'],
-                                            dataTransforms=dataTransforms, tissueLevelThreshold=0.995)
+                transforms.Normalize(global_channel_means.tolist(), global_channel_stds.tolist())
+            ])
+            pathml_slide.inferClassifier(trained_model, classNames=class_names,
+                                            dataTransforms=data_transforms, tissueLevelThreshold=0.995)
         """
 
         if not hasattr(self, 'tileDictionary'):
@@ -1666,7 +1671,7 @@ class Slide:
             foregroundLevelThreshold=foregroundLevelThreshold, transform=dataTransforms)
 
         pathSlideDataloader = torch.utils.data.DataLoader(pathSlideDataset, batch_size=batchSize, shuffle=False, num_workers=numWorkers)
-        predictionTileAddresses = []
+        classifierPredictionTileAddresses = []
         for inputs in tqdm(pathSlideDataloader):
             inputTile = inputs['image'].to(device)
             output = trainedModel(inputTile)
@@ -1681,16 +1686,130 @@ class Slide:
                                inputs['tileAddress'][1][index].item())
                 preds = batch_prediction[index, ...].tolist()
                 if len(preds) != len(classNames):
-                    raise ValueError('Model has '+str(len(preds))+' classes but only '+str(len(classes))+' class names were provided in the classes argument')
+                    raise ValueError('Model has '+str(len(preds))+' classes but only '+str(len(classNames))+' class names were provided in the classes argument')
                 prediction = {}
                 for i, pred in enumerate(preds):
                     prediction[classNames[i]] = pred
-                self.appendTag(tileAddress, 'inferencePrediction', prediction)
-                predictionTileAddresses.append(tileAddress)
-        if len(predictionTileAddresses) > 0:
-            self.predictionTileAddresses = predictionTileAddresses
+                self.appendTag(tileAddress, 'classifierInferencePrediction', prediction)
+                classifierPredictionTileAddresses.append(tileAddress)
+        if len(classifierPredictionTileAddresses) > 0:
+            self.classifierPredictionTileAddresses = classifierPredictionTileAddresses
         else:
             raise Warning('No suitable tiles found at current tissueLevelThreshold and foregroundLevelThreshold')
+
+
+
+##########################################################
+
+    def inferSegmenter(self, trainedModel, classNames, dataTransforms=None, batchSize=1, numWorkers=16, foregroundLevelThreshold=False, tissueLevelThreshold=False):
+        """A function to infer a trained segmentation model on a Slide object using
+        PyTorch.
+
+        Args:
+            trainedModel (torchvision.models): A PyTorch segmentation model that has been trained for the segmentation task desired for inference.
+            classNames (list of strings): a list of class names. The first class name is expected to correspond with the first channel of the output mask image, the second with the second, and so on.
+            dataTransforms (torchvision.transforms.Compose): a PyTorch torchvision.Compose object with the desired data transformations.
+            batchSize (int, optional): the number of tiles to use in each inference minibatch.
+            numWorkers (int, optional): the number of workers to use when inferring the model on the WSI
+            foregroundLevelThreshold (string or int or float, optional): if defined as an int, only infers trainedModel on tiles with a 0-100 foregroundLevel value less or equal to than the set value (0 is a black tile, 100 is a white tile). Only infers on Otsu's method-passing tiles if set to 'otsu', or triangle algorithm-passing tiles if set to 'triangle'. Default is not to filter on foreground at all.
+            tissueLevelThreshold (Boolean, optional): if defined, only infers trainedModel on tiles with a 0 to 1 tissueLevel probability greater than or equal to the set value. Default is False.
+
+        Example:
+            import torch
+            import torchvision
+            class_names = ['metastasis']
+            device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+            trained_model = UNet(n_channels=3, n_classes=len(class_names))
+            trained_model.load_state_dict(torch.load(path_to_model_state_dict, map_location=device))
+            pathml_slide.inferSegmenter(trained_model, classNames=class_names, batchSize=6, tissueLevelThreshold=0.995)
+        """
+
+        if not hasattr(self, 'tileDictionary'):
+            raise PermissionError(
+                'setTileProperties must be called before inferring a classifier')
+        if tissueLevelThreshold:
+            if not self.hasTissueDetection():
+                raise PermissionError('Deep tissue detection must be performed with detectTissue() before tissueLevelThreshold can be defined')
+        if foregroundLevelThreshold:
+            if 'foregroundLevel' not in self.tileDictionary[list(self.tileDictionary.keys())[0]]:
+                raise PermissionError('Foreground detection must be performed with detectForeground() before tissueLevelThreshold can be defined')
+        if type(classNames) != list:
+            raise ValueError('classes must be a list if defined')
+
+        if torch.cuda.is_available():
+            print("Inferring model on GPU")
+        else:
+            print("Inferring model on CPU")
+
+        device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+        trainedModel.to(device)
+        trainedModel.eval()
+
+        if trainedModel.n_classes != len(classNames):
+            raise ValueError('Model has '+str(trainedModel.n_classes)+' classes but only '+str(len(classNames))+' class names were provided in the classes argument')
+
+        pathSlideDataset = WholeSlideImageDataset(self, tissueLevelThreshold=tissueLevelThreshold,
+            foregroundLevelThreshold=foregroundLevelThreshold, transform=dataTransforms, segmenting=True)
+
+        pathSlideDataloader = torch.utils.data.DataLoader(pathSlideDataset, batch_size=batchSize, shuffle=False, num_workers=numWorkers)
+        segmenterPredictionTileAddresses = []
+        for inputs in tqdm(pathSlideDataloader):
+            inputTile = inputs['image'].to(device)
+
+            # input into net
+            output = trainedModel(inputTile)
+            output = output.to(device)
+
+            if trainedModel.n_classes > 1:
+                batch_probs = F.softmax(output, dim=1)
+            else:
+                batch_probs = torch.sigmoid(output)
+
+            for index in range(len(inputTile)):
+                tileAddress = (inputs['tileAddress'][0][index].item(),
+                               inputs['tileAddress'][1][index].item())
+
+                tile_probs = batch_probs[index, ...]
+
+                tile_probs = tile_probs.squeeze(0)
+
+                tf = transforms.Compose([
+                    transforms.ToPILImage(),
+                    transforms.Resize(pathSlideDataset.tileSize),
+                    #transforms.Resize(full_img.size[1]),
+                    transforms.ToTensor()
+                ])
+
+                tile_probs = tf(tile_probs.cpu())
+                full_mask = tile_probs.squeeze().cpu().numpy()
+
+                #print("full mask shape:", full_mask.shape)
+                #print("full mask shape length:", len(full_mask.shape))
+
+                if (len(full_mask.shape) == 2 and len(classNames) == 1):
+                    continue
+                elif (len(full_mask.shape) == 2 and len(classNames) != 1):
+                    raise ValueError('Model has 1 output class but '+str(len(classNames))+' class names were provided in the classes argument')
+                elif full_mask.shape[0] != len(classNames):
+                    raise ValueError('Model has '+str(full_mask.shape[-1])+' output classes but only '+str(len(classNames))+' class names were provided in the classes argument')
+
+                segmentation_masks = {}
+
+                if len(full_mask.shape) == 2: # only one output class
+                    segmentation_masks[classNames[0]] = full_mask
+                else: # multiple output classes
+                    for class_index in len(classNames):
+                        segmentation_masks[classNames[class_index]] = full_mask[class_index,...]
+
+                self.appendTag(tileAddress, 'segmenterInferencePrediction', segmentation_masks)
+                segmenterPredictionTileAddresses.append(tileAddress)
+
+        if len(segmenterPredictionTileAddresses) > 0:
+            self.segmenterPredictionTileAddresses = segmenterPredictionTileAddresses
+        else:
+            raise Warning('No suitable tiles found at current tissueLevelThreshold and foregroundLevelThreshold')
+
+####################################################
 
     def suitableTileAddresses(self, tissueLevelThreshold=False, foregroundLevelThreshold=False):
         """A function that returns a list of the tile address tuples that meet
@@ -1748,7 +1867,7 @@ class Slide:
                 suitableTileAddresses.append(tA)
         return suitableTileAddresses
 
-    def visualizeInference(self, classToVisualize, folder=False, level=4):
+    def visualizeClassifierInference(self, classToVisualize, folder=False, level=4):
         """A function to create an inference map image of a Slide after running
         inferClassifier() on it.
 
@@ -1758,21 +1877,21 @@ class Slide:
             level (int, optional): the level of the WSI pyramid to make the inference map image from.
 
         Example:
-            pathml_slide.visualizeInference("metastasis", folder="path/to/folder")
+            pathml_slide.visualizeClassifierInference("metastasis", folder="path/to/folder")
         """
 
         ourNewImg = self.thumbnail(level=level)
         classMask = np.zeros((self.numTilesInX, self.numTilesInY)[::-1])
 
-        #if not hasattr(self, 'predictionTileAddresses'):
+        #if not hasattr(self, 'segmenterPredictionTileAddresses'):
         foundPrediction = False
         for tileAddress, tileEntry in self.tileDictionary.items():
-            if 'inferencePrediction' in tileEntry:
-                if classToVisualize in tileEntry['inferencePrediction']:
-                    classMask[tileAddress[1],tileAddress[0]] = tileEntry['inferencePrediction'][classToVisualize]
+            if 'classifierInferencePrediction' in tileEntry:
+                if classToVisualize in tileEntry['classifierInferencePrediction']:
+                    classMask[tileAddress[1],tileAddress[0]] = tileEntry['classifierInferencePrediction'][classToVisualize]
                     foundPrediction = True
                 else:
-                    raise ValueError(classToVisualize+' not in inferencePrediction')
+                    raise ValueError(classToVisualize+' not in classifierInferencePrediction')
             else:
                 classMask[tileAddress[1],tileAddress[0]] = 0
         if not foundPrediction:
@@ -1873,15 +1992,15 @@ class Slide:
             probabilityThresholds (float or list of floats): the probability threshold or list of probability thresholds (in the range 0 to 1) to check. If a float is provided, just that probability threshold will be used, and an int of the number of tiles at or above that threshold will be returned. If a list of floats is provided, a list of ints of the number of tiles at or above each of those thresholds in respective order to the inputted threshold list will be returned.
         """
 
-        if not hasattr(self, 'predictionTileAddresses'):
+        if not hasattr(self, 'classifierPredictionTileAddresses'):
             foundPrediction = False
-            predictionTileAddresses = []
+            classifierPredictionTileAddresses = []
             for tileAddress, tileEntry in self.tileDictionary.items():
-                if 'inferencePrediction' in tileEntry:
-                    predictionTileAddresses.append(tileAddress)
+                if 'classifierInferencePrediction' in tileEntry:
+                    classifierPredictionTileAddresses.append(tileAddress)
                     foundPrediction = True
             if foundPrediction:
-                self.predictionTileAddresses = predictionTileAddresses
+                self.classifierPredictionTileAddresses = classifierPredictionTileAddresses
             else:
                 raise ValueError('No predictions found in slide. Use inferClassifier() to generate them.')
 
@@ -1895,10 +2014,10 @@ class Slide:
         numTilesAboveProbThreshList = []
         for probabilityThreshold in pT:
             numTilesAboveProbThresh = 0
-            for addr in self.predictionTileAddresses:
-                if classToThreshold not in self.tileDictionary[addr]['inferencePrediction']:
-                    raise ValueError(classToVisualize+' not in inferencePrediction at tile '+str(addr))
-                if self.tileDictionary[addr]['inferencePrediction'][classToThreshold] >= probabilityThreshold:
+            for addr in self.classifierPredictionTileAddresses:
+                if classToThreshold not in self.tileDictionary[addr]['classifierInferencePrediction']:
+                    raise ValueError(classToVisualize+' not in classifierInferencePrediction at tile '+str(addr))
+                if self.tileDictionary[addr]['classifierInferencePrediction'][classToThreshold] >= probabilityThreshold:
                     numTilesAboveProbThresh = numTilesAboveProbThresh + 1
             numTilesAboveProbThreshList.append(numTilesAboveProbThresh)
 
@@ -1925,21 +2044,21 @@ class Slide:
             metric (string, optional): which metric to compute. Options are 'accuracy', 'balanced_accuracy', 'f1', 'precision', or 'recall'. Default is 'accuracy'.
         """
 
-        if not hasattr(self, 'predictionTileAddresses'):
+        if not hasattr(self, 'classifierPredictionTileAddresses'):
             foundPrediction = False
-            predictionTileAddresses = []
+            classifierPredictionTileAddresses = []
             for tileAddress, tileEntry in self.tileDictionary.items():
-                if 'inferencePrediction' in tileEntry:
-                    predictionTileAddresses.append(tileAddress)
+                if 'classifierInferencePrediction' in tileEntry:
+                    classifierPredictionTileAddresses.append(tileAddress)
                     foundPrediction = True
             if foundPrediction:
-                self.predictionTileAddresses = predictionTileAddresses
+                self.classifierPredictionTileAddresses = classifierPredictionTileAddresses
             else:
                 raise ValueError('No predictions found in slide. Use inferClassifier() to generate them.')
 
         if not hasattr(self, 'annotationClassMultiPolygons'):
             print("Warning: no annotations found in Slide. All tiles in Slide will be assumed to be negative for "+classToThreshold+". Run addAnnotations() if there should be annotations in this Slide.")
-        #elif classToThreshold+'Overlap' not in self.tileDictionary[self.predictionTileAddresses[0]]:
+        #elif classToThreshold+'Overlap' not in self.tileDictionary[self.classifierPredictionTileAddresses[0]]:
         #    print("Warning: no annotations found in Slide. All tiles in Slide will be assumed to be negative for "+classToThreshold+". Run addAnnotations() if there should be annotations in this Slide.")
             #raise PermissionError(
             #    'addAnnotations must be called before extracting tiles')
@@ -1956,7 +2075,7 @@ class Slide:
         for probabilityThreshold in pT:
             ground_truths = []
             predictions = []
-            for predictionTileAddress in self.predictionTileAddresses:
+            for predictionTileAddress in self.classifierPredictionTileAddresses:
 
                 if classToThreshold+'Overlap' not in self.tileDictionary[predictionTileAddress]:
                     ground_truths.append(0)
@@ -1966,9 +2085,9 @@ class Slide:
                 else:
                     ground_truths.append(0)
 
-                if classToThreshold not in self.tileDictionary[predictionTileAddress]['inferencePrediction']:
-                    raise ValueError(classToVisualize+' not in inferencePrediction at tile '+str(predictionTileAddress))
-                if self.tileDictionary[predictionTileAddress]['inferencePrediction'][classToThreshold] >= probabilityThreshold:
+                if classToThreshold not in self.tileDictionary[predictionTileAddress]['classifierInferencePrediction']:
+                    raise ValueError(classToVisualize+' not in classifierInferencePrediction at tile '+str(predictionTileAddress))
+                if self.tileDictionary[predictionTileAddress]['classifierInferencePrediction'][classToThreshold] >= probabilityThreshold:
                     predictions.append(1)
                 else:
                     predictions.append(0)
