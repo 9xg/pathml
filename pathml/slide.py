@@ -20,6 +20,7 @@ from pathlib import Path
 from pathml.processor import Processor
 from pathml.models.tissuedetector import tissueDetector
 from pathml.utils.torch.WholeSlideImageDataset import WholeSlideImageDataset
+from pathml.utils.torch.dice_loss import dice_coeff
 import xml.etree.ElementTree as ET
 from shapely import geometry
 from shapely.ops import unary_union
@@ -29,8 +30,6 @@ import json
 import os
 import sys
 import pickle
-sys.path.append('/home/cri.camres.org/berman01/pathml-tutorial/Pytorch-UNet')
-from unet import UNet
 pv.cache_set_max(0)
 
 
@@ -200,6 +199,38 @@ class Slide:
     #def loadTileDictionary(self, dictionaryFilePath):
     #    pass
 
+    def getNonoverlappingSegmentationInferenceArray(self, aggregationMethod='average', padWithZeros='True'):
+
+        if padWithZeros:
+            inference_array = np.zeros((self.slide.height, self.slide.width))
+        else:
+            inference_array = np.empty((self.slide.height, self.slide.width))
+            inference_array[:] = np.nan
+
+        point_tuples = []
+        for x in range(self.slide.width):
+            for y in range(self.slide.height):
+                point_tuples.append((x,y))
+
+        pixels = pd.DataFrame({'xy_tuple': point_tuples,
+                                'x': [point_tuple[0] for point_tuple in point_tuples],
+                                'y': [point_tuple[1] for point_tuple in point_tuples]})
+        pixels = geopandas.GeoDataFrame(pixels, geometry=geopandas.points_from_xy(pixels.x, pixels.y))
+
+        tiles =
+
+        for y in range(self.slide.height):
+            for x in range(self.slide.width):
+                inference_array[y,x] = self._inferencePixelValue(y, x, aggregationMethod=aggregationMethod)
+
+        return inference_array
+
+    def _inferencePixelValue(self, y, x, aggregationMethod='average'):
+
+        # find which tiles in tile dictionary overlap pixel at height y and width x
+
+
+
     def detectForeground(self, level=4, overwriteExistingForegroundDetection=False, threshold=None):
         """A function to implement traditional foreground filtering methods on the
         tile dictionary to exclude background tiles from subsequent operations.
@@ -213,7 +244,7 @@ class Slide:
             pathml_slide.detectForeground()
         """
 
-        if not hasattr(self, 'tileDictionary'):
+        if not self.hasTileDictionary():
             raise PermissionError(
                 'setTileProperties must be called before foreground detection')
         if not overwriteExistingForegroundDetection and 'foregroundLevel' in self.tileDictionary[list(self.tileDictionary.keys())[0]]:
@@ -284,7 +315,8 @@ class Slide:
         return True
 
     def getTile(self, tileAddress, writeToNumpy=False, useFetch=False):
-        """A function to return a desired tile in the tile dictionary.
+        """A function to return a desired tile in the tile dictionary in the
+        form of a pyvips Image.
 
         Args:
             tileAddress (tuple of ints): the (x, y) coordinate touple of the desired tile to extract.
@@ -295,7 +327,7 @@ class Slide:
             pathml_slide.getTile((15,20))
         """
 
-        if not hasattr(self, 'tileDictionary'):
+        if not self.hasTileDictionary():
             raise PermissionError(
                 'setTileProperties must be called before accessing tiles')
         if len(tileAddress) == 2 and isinstance(tileAddress, tuple):
@@ -340,7 +372,7 @@ class Slide:
             pathml_slide.saveTile((15,20), "tile_15x_20y.jpg" folder="/path/to/tiles_directory")
         """
 
-        if not hasattr(self, 'tileDictionary'):
+        if not self.hasTileDictionary():
             raise PermissionError(
                 'setTileProperties must be called before saving tile')
         if len(tileAddress) == 2 and isinstance(tileAddress, tuple):
@@ -393,7 +425,7 @@ class Slide:
             pathml_slide.saveSelf("pathml_slide" folder="/path/to/pathml_slides")
         """
 
-        if not hasattr(self, 'tileDictionary'):
+        if not self.hasTileDictionary():
             raise PermissionError('setTileProperties must be called before saving self')
 
         # get case ID
@@ -406,12 +438,12 @@ class Slide:
             id = self.slideFileName
 
         if hasattr(self, 'rawTissueDetectionMap'):
-            if hasattr(self, 'annotationClassMultiPolygons'):
+            if self.hasAnnotations():
                 outputDict = {'slideFilePath': self.slideFilePath, 'tileDictionary': self.tileDictionary, 'rawTissueDetectionMap': self.rawTissueDetectionMap, 'annotationClassMultiPolygons': self.annotationClassMultiPolygons}
             else:
                 outputDict = {'slideFilePath': self.slideFilePath, 'tileDictionary': self.tileDictionary, 'rawTissueDetectionMap': self.rawTissueDetectionMap}
         else:
-            if hasattr(self, 'annotationClassMultiPolygons'):
+            if self.hasAnnotations():
                 outputDict = {'slideFilePath': self.slideFilePath, 'tileDictionary': self.tileDictionary, 'annotationClassMultiPolygons': self.annotationClassMultiPolygons}
             else:
                 outputDict = {'slideFilePath': self.slideFilePath, 'tileDictionary': self.tileDictionary}
@@ -430,7 +462,7 @@ class Slide:
             pathml_slide.appendTag((15,20), "brightness_level", 0.7)
         """
 
-        if not hasattr(self, 'tileDictionary'):
+        if not self.hasTileDictionary():
             raise PermissionError(
                 'setTileProperties must be called before appending tag')
         self.tileDictionary[tileAddress][key] = val
@@ -444,9 +476,19 @@ class Slide:
                                       shape=[self.lowMagSlide.height, self.lowMagSlide.width, self.lowMagSlide.bands])
         return self.lowMagSlide
 
+    def hasTileDictionary(self):
+        """A function that returns a Boolean of whether the Slide object has a
+        tile dictionary by setTileProperties() yet.
+
+        Example:
+            pathml_slide.hasTileDictionary()
+        """
+
+        return hasattr(self, 'tileDictionary')
+
     def hasAnnotations(self):
         """A function that returns a Boolean of whether annotations have been
-        added to the tile dictionary.
+        added to the tile dictionary by addAnnotations() yet.
 
         Example:
             pathml_slide.hasAnnotations()
@@ -456,7 +498,7 @@ class Slide:
 
     def hasTissueDetection(self):
         """A function that returns a Boolean of whether deep tissue detections
-        have been added to the tile dictionary.
+        have been added to the tile dictionary by detectTissue() yet.
 
         Example:
             pathml_slide.hasTissueDetection()
@@ -545,7 +587,7 @@ class Slide:
         #    raise ValueError('fileType must be ASAP or QuPath')
         #if fileType in ['qupath', 'Qupath', 'QuPath', 'QUPATH']: # REMOVE ONCE FIXED
         #    raise ValueError('QuPath annotation files not currently supported')
-        if not hasattr(self, 'tileDictionary'):
+        if not self.hasTileDictionary():
             raise PermissionError(
                 'setTileProperties must be called before adding annotations')
 
@@ -770,32 +812,56 @@ class Slide:
 
     # SEGMENTATION
     # ADAM EXPERIMENTAL
-    def getAnnotationTileMask(self, tileAddress, maskClass, verbose=False):
+    def getAnnotationTileMask(self, tileAddress, maskClass, writeToNumpy=False, verbose=False, acceptTilesWithoutClass=False):
         """A function that returns the PIL Image of the binary mask of a
-        tile-annotation class overlap.
+        tile-annotation class overlap. Note that the output values are 0 (white)
+        to 255 (black).
 
         Args:
             tileAddress (tuple of ints): the (x, y) coordinate touple of the desired tile to get the annotation mask for.
             maskClass (string): the class to extract a segmentation mask for.
+            writeToNumpy (Boolean, optional): whether to return the annotation tile mask in the form of a numpy array instead of a PIL Image. Default is False.
+            acceptTilesWithoutClass (Boolean, optional): whether to allow the input of tiles that lack either annotations or annotations with maskClass present. Default is False. If set to True, in cases where tiles lack either annotations or annotations with maskClass present, a blank mask will be returned.
             verbose (Boolean, optional): whether to output verbose messages. Default is False.
 
         Example:
             pathml_slide.getAnnotationTileMask((15,20), "metastasis")
         """
 
-        if not hasattr(self, 'tileDictionary'):
+        height = self.tileDictionary[tileAddress]['height']
+
+        if not self.hasTileDictionary():
             raise PermissionError('setTileProperties must be called before extracting tiles')
-        if not hasattr(self, 'annotationClassMultiPolygons'):
-            raise PermissionError('addAnnotations must be called before extracting tiles')
         if tileAddress not in self.tileDictionary:
             raise ValueError('tileAddress must be in tileDictionary')
-        if maskClass not in self.annotationClassMultiPolygons:
-            raise ValueError(maskClass+' not in annotationClassMultiPolygons')
+        if not self.hasAnnotations():
+            #print("Warning: no annotations found in Slide. All ground truth tile masks in Slide will be be totally absent of "+classToThreshold+" pixels. Returning blank tile mask. Run addAnnotations() if there should be annotations in this Slide.")
+            if acceptTilesWithoutClass:
+                if writeToNumpy:
+                    return np.zeros((height, height))
+                    #return np.array(mask.transpose(Image.FLIP_TOP_BOTTOM))
+                else:
+                    blank_mask = Image.new('1', (height, height), 0)
+                    return blank_mask
+            else:
+                raise PermissionError('addAnnotations must be called before extracting tiles')
+        else:
+            if maskClass not in self.annotationClassMultiPolygons:
+                if acceptTilesWithoutClass:
+                    if writeToNumpy:
+                        return np.zeros((height, height))
+                        #return np.array(mask.transpose(Image.FLIP_TOP_BOTTOM))
+                    else:
+                        blank_mask = Image.new('1', (height, height), 0)
+                        return blank_mask
+                else:
+                    raise ValueError(maskClass+' not in annotationClassMultiPolygons')
+
+        #print('PERFORMING ACTUAL COMPARISONS')
 
         slideHeight = int(self.slideProperties['height'])
         x = self.tileDictionary[tileAddress]['x']
         y = self.tileDictionary[tileAddress]['y']
-        height = self.tileDictionary[tileAddress]['height']
         tileBox = geometry.box(x, (slideHeight-y)-height, x+height, slideHeight-y)
 
         mask = Image.new('1', (height, height), 0)
@@ -811,7 +877,10 @@ class Slide:
         else:
             raise Warning('The value at key '+maskClass+' in annotationClassMultiPolygons must be Shapely Polygon or MultiPolygon')
 
-        return mask.transpose(Image.FLIP_TOP_BOTTOM)
+        if writeToNumpy:
+            return np.array(mask.transpose(Image.FLIP_TOP_BOTTOM))
+        else:
+            return mask.transpose(Image.FLIP_TOP_BOTTOM)
 
     # Adds overlap from one annotation to existing mask
     def _getTileMask(self, tile_box, single_annotation, mask, fillPixelValue=1, verbose=False):
@@ -865,10 +934,10 @@ class Slide:
         return mask
 
     #def numberOfSuitableTiles(self, className, tileAnnotationOverlapThreshold=0.5, foregroundLevelThreshold=False, tissueLevelThreshold=False):
-    #    if not hasattr(self, 'tileDictionary'):
+    #    if not self.hasTileDictionary():
     #        raise PermissionError(
     #            'setTileProperties must be called before counting suitable tiles')
-    #    if not hasattr(self, 'annotationClassMultiPolygons'):
+    #    if not self.hasAnnotations():
     #        raise PermissionError(
     #            'addAnnotations must be called before counting suitable tiles')
     #    if className+'Overlap' not in self.tileDictionary[list(self.tileDictionary.keys())[0]]:
@@ -938,19 +1007,16 @@ class Slide:
             channel_data = pathml_slide.extractAnnotationTiles("/path/to/directory", numTilesToExtractPerClass=200, tissueLevelThreshold=0.995)
         """
 
-        if not hasattr(self, 'tileDictionary'):
+        if not self.hasTileDictionary():
             raise PermissionError(
                 'setTileProperties must be called before extracting tiles')
-
-        if not hasattr(self, 'annotationClassMultiPolygons'):
+        if not self.hasAnnotations():
             raise PermissionError(
                 'addAnnotations must be called before extracting tiles')
-
         if seed:
             if type(seed) != int:
                 raise ValueError('Seed must be an integer')
             random.seed(seed)
-
         # get case ID
         if tileDirName:
             if type(tileDirName) != str:
@@ -1089,51 +1155,52 @@ class Slide:
             raise ValueError("numTilesToExtractPerClass must be a positive integer, a dictionary, or 'all'")
 
         # Create empty class tile directories for extractionClasses with at least one suitable tile
-        for extractionClass,tte in annotatedTilesToExtract.items():
-            if len(tte) > 0:
-                try:
-                    os.makedirs(os.path.join(outputDir, 'tiles', id, extractionClass), exist_ok=True)
-                except:
-                    raise ValueError(os.path.join(outputDir, 'tiles', id, extractionClass)+' is not a valid path')
-                if otherClassNames:
-                    if type(otherClassNames) == str:
-                        try:
-                            os.makedirs(os.path.join(outputDir, 'tiles', id, otherClassNames), exist_ok=True)
-                        except:
-                            raise ValueError(os.path.join(outputDir, 'tiles', id, otherClassNames)+' is not a valid path')
-                    elif type(otherClassNames) == list:
-                        for otherClassName in otherClassNames:
-                            if type(otherClassName) != str:
-                                raise ValueError('If otherClassNames is a list, all elements of list must be strings')
-                            try:
-                                os.makedirs(os.path.join(outputDir, 'tiles', id, otherClassName), exist_ok=True)
-                            except:
-                                raise ValueError(os.path.join(outputDir, 'tiles', id, otherClassName)+' is not a valid path')
-                    else:
-                        raise ValueError('otherClassNames must be a string or list of strings')
-
-                # Create empty class mask directory (if desired)
-                if extractSegmentationMasks:
+        if not returnOnlyNumTilesFromThisClass:
+            for extractionClass,tte in annotatedTilesToExtract.items():
+                if len(tte) > 0:
                     try:
-                        os.makedirs(os.path.join(outputDir, 'masks', id, extractionClass), exist_ok=True)
+                        os.makedirs(os.path.join(outputDir, 'tiles', id, extractionClass), exist_ok=True)
                     except:
-                        raise ValueError(os.path.join(outputDir, 'masks', id, extractionClass)+' is not a valid path')
+                        raise ValueError(os.path.join(outputDir, 'tiles', id, extractionClass)+' is not a valid path')
                     if otherClassNames:
                         if type(otherClassNames) == str:
                             try:
-                                os.makedirs(os.path.join(outputDir, 'masks', id, otherClassNames), exist_ok=True)
+                                os.makedirs(os.path.join(outputDir, 'tiles', id, otherClassNames), exist_ok=True)
                             except:
-                                raise ValueError(os.path.join(outputDir, 'masks', id, otherClassNames)+' is not a valid path')
+                                raise ValueError(os.path.join(outputDir, 'tiles', id, otherClassNames)+' is not a valid path')
                         elif type(otherClassNames) == list:
                             for otherClassName in otherClassNames:
                                 if type(otherClassName) != str:
                                     raise ValueError('If otherClassNames is a list, all elements of list must be strings')
                                 try:
-                                    os.makedirs(os.path.join(outputDir, 'masks', id, otherClassName), exist_ok=True)
+                                    os.makedirs(os.path.join(outputDir, 'tiles', id, otherClassName), exist_ok=True)
                                 except:
-                                    raise ValueError(os.path.join(outputDir, 'masks', id, otherClassName)+' is not a valid path')
+                                    raise ValueError(os.path.join(outputDir, 'tiles', id, otherClassName)+' is not a valid path')
                         else:
                             raise ValueError('otherClassNames must be a string or list of strings')
+
+                    # Create empty class mask directory (if desired)
+                    if extractSegmentationMasks:
+                        try:
+                            os.makedirs(os.path.join(outputDir, 'masks', id, extractionClass), exist_ok=True)
+                        except:
+                            raise ValueError(os.path.join(outputDir, 'masks', id, extractionClass)+' is not a valid path')
+                        if otherClassNames:
+                            if type(otherClassNames) == str:
+                                try:
+                                    os.makedirs(os.path.join(outputDir, 'masks', id, otherClassNames), exist_ok=True)
+                                except:
+                                    raise ValueError(os.path.join(outputDir, 'masks', id, otherClassNames)+' is not a valid path')
+                            elif type(otherClassNames) == list:
+                                for otherClassName in otherClassNames:
+                                    if type(otherClassName) != str:
+                                        raise ValueError('If otherClassNames is a list, all elements of list must be strings')
+                                    try:
+                                        os.makedirs(os.path.join(outputDir, 'masks', id, otherClassName), exist_ok=True)
+                                    except:
+                                        raise ValueError(os.path.join(outputDir, 'masks', id, otherClassName)+' is not a valid path')
+                            else:
+                                raise ValueError('otherClassNames must be a string or list of strings')
 
         channel_sums = np.zeros(3)
         channel_squared_sums = np.zeros(3)
@@ -1247,7 +1314,7 @@ class Slide:
             channel_data = pathml_slide.extractRandomUnannotatedTiles("/path/to/directory", numTilesToExtract=200, unannotatedClassName="non_metastasis", tissueLevelThreshold=0.995)
         """
 
-        if not hasattr(self, 'tileDictionary'):
+        if not self.hasTileDictionary():
             raise PermissionError(
                 'setTileProperties must be called before extracting tiles')
 
@@ -1510,7 +1577,7 @@ class Slide:
             pathml_slide.detectTissue()
         """
 
-        if not hasattr(self, 'tileDictionary'):
+        if not self.hasTileDictionary():
             raise PermissionError(
                 'setTileProperties must be called before applying tissue detector')
         if hasattr(self, 'rawTissueDetectionMap') and (not overwriteExistingTissueDetection):
@@ -1554,7 +1621,7 @@ class Slide:
             pathml_slide.detectTissueFromRawTissueDetectionMap(Slide("/path/to/old_pathml_slide.pml")).rawTissueDetectionMap)
         """
 
-        if not hasattr(self, 'tileDictionary'):
+        if not self.hasTileDictionary():
             raise PermissionError(
                 'setTileProperties must be called before applying tissue detector')
         if hasattr(self, 'rawTissueDetectionMap') and (not overwriteExistingTissueDetection):
@@ -1587,7 +1654,7 @@ class Slide:
             pathml_slide.visualizeTissueDetection(folder="/path/where/tissue_detection_map_will_be_saved")
         """
 
-        if not hasattr(self, 'tileDictionary'):
+        if not self.hasTileDictionary():
             raise PermissionError('setTileProperties must be called before saving self')
         if not hasattr(self, 'rawTissueDetectionMap'):
             raise PermissionError('detectTissue must be called before getting resized tissue detection map')
@@ -1617,7 +1684,7 @@ class Slide:
             plt.show(block=False)
 
     # ADAM EXPERIMENTAL
-    def inferClassifier(self, trainedModel, classNames, dataTransforms=None, batchSize=30, numWorkers=16, foregroundLevelThreshold=False, tissueLevelThreshold=False):
+    def inferClassifier(self, trainedModel, classNames, dataTransforms=None, batchSize=30, numWorkers=16, foregroundLevelThreshold=False, tissueLevelThreshold=False, overwriteExistingClassifications=False):
         """A function to infer a trained classifier on a Slide object using
         PyTorch.
 
@@ -1629,6 +1696,7 @@ class Slide:
             numWorkers (int, optional): the number of workers to use when inferring the model on the WSI
             foregroundLevelThreshold (string or int or float, optional): if defined as an int, only infers trainedModel on tiles with a 0-100 foregroundLevel value less or equal to than the set value (0 is a black tile, 100 is a white tile). Only infers on Otsu's method-passing tiles if set to 'otsu', or triangle algorithm-passing tiles if set to 'triangle'. Default is not to filter on foreground at all.
             tissueLevelThreshold (Boolean, optional): if defined, only infers trainedModel on tiles with a 0 to 1 tissueLevel probability greater than or equal to the set value. Default is False.
+            overwriteExistingClassifications (Boolean, optional): whether to overwrite any existing classification inferences if they are already present in the tile dictionary. Default is False.
 
         Example:
             import torchvision
@@ -1646,7 +1714,7 @@ class Slide:
                                             dataTransforms=data_transforms, tissueLevelThreshold=0.995)
         """
 
-        if not hasattr(self, 'tileDictionary'):
+        if not self.hasTileDictionary():
             raise PermissionError(
                 'setTileProperties must be called before inferring a classifier')
         if tissueLevelThreshold:
@@ -1669,6 +1737,10 @@ class Slide:
 
         pathSlideDataset = WholeSlideImageDataset(self, tissueLevelThreshold=tissueLevelThreshold,
             foregroundLevelThreshold=foregroundLevelThreshold, transform=dataTransforms)
+
+        if 'classifierInferencePrediction' in self.tileDictionary[pathSlideDataset.suitableTileAddresses[0]]:
+            if not overwriteExistingClassifications:
+                raise PermissionError('Classification predictions are already present in the tile dictionary. Set overwriteExistingClassifications to True to overwrite them.')
 
         pathSlideDataloader = torch.utils.data.DataLoader(pathSlideDataset, batch_size=batchSize, shuffle=False, num_workers=numWorkers)
         classifierPredictionTileAddresses = []
@@ -1701,7 +1773,7 @@ class Slide:
 
 ##########################################################
 
-    def inferSegmenter(self, trainedModel, classNames, dataTransforms=None, batchSize=1, numWorkers=16, foregroundLevelThreshold=False, tissueLevelThreshold=False):
+    def inferSegmenter(self, trainedModel, classNames, dataTransforms=None, batchSize=1, numWorkers=16, foregroundLevelThreshold=False, tissueLevelThreshold=False, overwriteExistingSegmentations=False):#, saveInChunksAtFolder=False):
         """A function to infer a trained segmentation model on a Slide object using
         PyTorch.
 
@@ -1713,6 +1785,7 @@ class Slide:
             numWorkers (int, optional): the number of workers to use when inferring the model on the WSI
             foregroundLevelThreshold (string or int or float, optional): if defined as an int, only infers trainedModel on tiles with a 0-100 foregroundLevel value less or equal to than the set value (0 is a black tile, 100 is a white tile). Only infers on Otsu's method-passing tiles if set to 'otsu', or triangle algorithm-passing tiles if set to 'triangle'. Default is not to filter on foreground at all.
             tissueLevelThreshold (Boolean, optional): if defined, only infers trainedModel on tiles with a 0 to 1 tissueLevel probability greater than or equal to the set value. Default is False.
+            overwriteExistingSegmentations (Boolean, optional): whether to overwrite any existing segmentation inferences if they are already present in the tile dictionary. Default is False.
 
         Example:
             import torch
@@ -1724,7 +1797,7 @@ class Slide:
             pathml_slide.inferSegmenter(trained_model, classNames=class_names, batchSize=6, tissueLevelThreshold=0.995)
         """
 
-        if not hasattr(self, 'tileDictionary'):
+        if not self.hasTileDictionary():
             raise PermissionError(
                 'setTileProperties must be called before inferring a classifier')
         if tissueLevelThreshold:
@@ -1751,9 +1824,15 @@ class Slide:
         pathSlideDataset = WholeSlideImageDataset(self, tissueLevelThreshold=tissueLevelThreshold,
             foregroundLevelThreshold=foregroundLevelThreshold, transform=dataTransforms, segmenting=True)
 
+        if 'segmenterInferencePrediction' in self.tileDictionary[pathSlideDataset.suitableTileAddresses[0]]:
+            if not overwriteExistingSegmentations:
+                raise PermissionError('Segmentation predictions are already present in the tile dictionary. Set overwriteExistingSegmentations to True to overwrite them.')
+
         pathSlideDataloader = torch.utils.data.DataLoader(pathSlideDataset, batch_size=batchSize, shuffle=False, num_workers=numWorkers)
         segmenterPredictionTileAddresses = []
+        counter = 0
         for inputs in tqdm(pathSlideDataloader):
+
             inputTile = inputs['image'].to(device)
 
             # input into net
@@ -1777,17 +1856,20 @@ class Slide:
                     transforms.ToPILImage(),
                     transforms.Resize(pathSlideDataset.tileSize),
                     #transforms.Resize(full_img.size[1]),
-                    transforms.ToTensor()
+                    transforms.ToTensor() # converts from HWC to CWH and divides by 255
                 ])
 
                 tile_probs = tf(tile_probs.cpu())
                 full_mask = tile_probs.squeeze().cpu().numpy()
+                #full_mask = np.float16(full_mask)
+
+                #print("Output mask data type:", full_mask.dtype)
 
                 #print("full mask shape:", full_mask.shape)
                 #print("full mask shape length:", len(full_mask.shape))
 
                 if (len(full_mask.shape) == 2 and len(classNames) == 1):
-                    continue
+                    pass
                 elif (len(full_mask.shape) == 2 and len(classNames) != 1):
                     raise ValueError('Model has 1 output class but '+str(len(classNames))+' class names were provided in the classes argument')
                 elif full_mask.shape[0] != len(classNames):
@@ -1801,8 +1883,18 @@ class Slide:
                     for class_index in len(classNames):
                         segmentation_masks[classNames[class_index]] = full_mask[class_index,...]
 
+                #if saveInChunksAtFolder:
+                #    if not 'segmenterInferencePrediction' in self.tileDictionary[tileAddress]:
+                #        self.appendTag(tileAddress, 'segmenterInferencePrediction', segmentation_masks)
+                #else:
                 self.appendTag(tileAddress, 'segmenterInferencePrediction', segmentation_masks)
                 segmenterPredictionTileAddresses.append(tileAddress)
+
+                #counter = counter + 1
+                #if saveInChunksAtFolder:
+                #    if len(counter) > 1000
+                #    self.saveSelf(folder=saveInChunksAtFolder)
+                #    counter = 0
 
         if len(segmenterPredictionTileAddresses) > 0:
             self.segmenterPredictionTileAddresses = segmenterPredictionTileAddresses
@@ -1810,6 +1902,44 @@ class Slide:
             raise Warning('No suitable tiles found at current tissueLevelThreshold and foregroundLevelThreshold')
 
 ####################################################
+
+
+
+    def getTileDiceScore(self, tileAddress, className, pixelBinarizationThreshold=0.5):
+        """A function that returns the Dice coefficient by comparing the tile's
+        ground truth segmentation mask from addAnnotations() with the tile's
+        inference segmentation mask output by a trained model via inferSegmenter().
+
+        Args:
+            tileAddress (tuple): the tile dictionary address of the tile to compute the Dice score for.
+            className (string): the name of the class to compute the Dice score for. This class name must be present in the tile dictionary in both the annotations (added to the tile dictionry via addAnnotations()) as well in the segmentation inference output (added to the tile dictionary via inferSegmenter()).
+            pixelBinarizationThreshold (float, optional): the 0-1 threshold above which a pixel in the segmentation probability mask output by the trained model is considered a member of the class. Default is 0.5.
+
+        Example:
+            tile_dice_score = getTileDiceScore(pathml_slide.suitableTileAddresses[0], 'metastasis')
+        """
+
+        if not self.hasTileDictionary():
+            raise PermissionError(
+                'setTileProperties must be called before getting a tile Dice score.')
+        #if not self.hasAnnotations():
+        #    print("Warning: no annotations found in Slide. All ground truth tile masks in Slide will be be totally absent of "+classToThreshold+" pixels. Run addAnnotations() if there should be annotations in this Slide.")
+        if 'segmenterInferencePrediction' not in self.tileDictionary[tileAddress]:
+            raise PermissionError('No segmentation prediction currently exists at the specified tile address. Please run inferSegmenter() and make sure that the specified tile is within the suitable tile set requested with tissueLevelThreshold and foregroundLevelThreshold.')
+        if className not in self.tileDictionary[tileAddress]['segmenterInferencePrediction']:
+            raise PermissionError(className+' is not a class present in segmenterInferencePrediction.')
+        #if className not in self.annotationClassMultiPolygons:
+        #    raise PermissionError(className+' is not a class present in annotations.')
+
+        binarized_prediction_mask = (torch.from_numpy(self.tileDictionary[tileAddress]['segmenterInferencePrediction'][className]) > pixelBinarizationThreshold).float()
+        # we set acceptTilesWithoutClass to True so that we will get blank masks for negative slides
+        ground_truth_mask = torch.from_numpy(self.getAnnotationTileMask(tileAddress, className, writeToNumpy=True, acceptTilesWithoutClass=True)).float()
+        ground_truth_mask = torch.div(ground_truth_mask, 255) # getAnnotationTileMask outputs 0-255 arrays, so we need to normalize to be 0-1 range
+        #print("mean of ground truth mask:", torch.mean(ground_truth_mask))
+        return dice_coeff(binarized_prediction_mask, ground_truth_mask).item()
+
+
+
 
     def suitableTileAddresses(self, tissueLevelThreshold=False, foregroundLevelThreshold=False):
         """A function that returns a list of the tile address tuples that meet
@@ -1824,7 +1954,7 @@ class Slide:
             suitable_tile_addresses = pathml_slide.suitableTileAddresses(tissueLevelThreshold=0.995, foregroundLevelThreshold=88)
         """
 
-        if not hasattr(self, 'tileDictionary'):
+        if not self.hasTileDictionary():
             raise PermissionError(
                 'setTileProperties must be called before tile counting')
         if foregroundLevelThreshold:
@@ -1945,7 +2075,7 @@ class Slide:
             pathml_slide.visualizeForeground("otsu", folder="path/to/folder")
         """
 
-        if not hasattr(self, 'tileDictionary'):
+        if not self.hasTileDictionary():
             raise PermissionError(
                 'setTileProperties must be called before inferring a classifier')
         if 'foregroundLevel' not in self.tileDictionary[list(self.tileDictionary.keys())[0]]:
@@ -2026,7 +2156,7 @@ class Slide:
         else:
             return numTilesAboveProbThreshList[0]
 
-    def classMetricAtThreshold(self, classToThreshold, probabilityThresholds, tileAnnotationOverlapThreshold=0.5, metric="accuracy"):
+    def classifierMetricAtThreshold(self, classToThreshold, probabilityThresholds, tileAnnotationOverlapThreshold=0.5, metric="accuracy", assignZeroToTilesWithoutAnnotationOverlap=True):
         """A function to return the tile-level metric of a class probability
         threshold (or list of thresholds) compared to the ground truth, where a
         tile with ground truth annotation overlap greater than or equal to
@@ -2042,6 +2172,7 @@ class Slide:
             probabilityThresholds (float or list of floats): the probability threshold or list of probability thresholds (in the range 0 to 1) to check. If a float is provided, just that probability threshold will be used, and a float of the accuracy of the classifier using that threshold as when the model considered a tile positive for the class will be returned. If a list of floats is provided, a list of floats of accuracies for those thresholds will be returned in respective order the inputted threshold list will be returned.
             tileAnnotationOverlapThreshold (float, optional): the class annotation overlap threshold at or above which a tile is considered ground truth positive for that class. Default is 0.5.
             metric (string, optional): which metric to compute. Options are 'accuracy', 'balanced_accuracy', 'f1', 'precision', or 'recall'. Default is 'accuracy'.
+            assignZeroToTilesWithoutAnnotationOverlap (Boolean, optional): whether to assign a ground truth metric value of 0 (or else throw an error) for tiles that lack an overlap with classToThreshold in the ground truth annotations. Default is True.
         """
 
         if not hasattr(self, 'classifierPredictionTileAddresses'):
@@ -2054,9 +2185,9 @@ class Slide:
             if foundPrediction:
                 self.classifierPredictionTileAddresses = classifierPredictionTileAddresses
             else:
-                raise ValueError('No predictions found in slide. Use inferClassifier() to generate them.')
+                raise ValueError('No classification predictions found in Slide. Use inferClassifier() to generate them.')
 
-        if not hasattr(self, 'annotationClassMultiPolygons'):
+        if not self.hasAnnotations():
             print("Warning: no annotations found in Slide. All tiles in Slide will be assumed to be negative for "+classToThreshold+". Run addAnnotations() if there should be annotations in this Slide.")
         #elif classToThreshold+'Overlap' not in self.tileDictionary[self.classifierPredictionTileAddresses[0]]:
         #    print("Warning: no annotations found in Slide. All tiles in Slide will be assumed to be negative for "+classToThreshold+". Run addAnnotations() if there should be annotations in this Slide.")
@@ -2078,8 +2209,10 @@ class Slide:
             for predictionTileAddress in self.classifierPredictionTileAddresses:
 
                 if classToThreshold+'Overlap' not in self.tileDictionary[predictionTileAddress]:
-                    ground_truths.append(0)
-                    #raise ValueError(classToThreshold+' not found at tile '+str(predictionTileAddress))
+                    if assignZeroToTilesWithoutMetric:
+                        ground_truths.append(0)
+                    else:
+                        raise ValueError(classToThreshold+' not found at tile '+str(predictionTileAddress))
                 elif self.tileDictionary[predictionTileAddress][classToThreshold+'Overlap'] >= tileAnnotationOverlapThreshold:
                     ground_truths.append(1)
                 else:
@@ -2103,7 +2236,102 @@ class Slide:
             elif metric == "recall":
                 metrics.append(recall_score(ground_truths, predictions))
             else:
-                raise ValueError("metric must be one of 'accuracy', 'balanced_accuracy', 'f1', 'precision', or 'recall'")
+                raise ValueError("metric must be one of: 'accuracy', 'balanced_accuracy', 'f1', 'precision', or 'recall'")
+
+        if len(metrics) > 1:
+            return metrics
+        else:
+            return metrics[0]
+
+########################################################################################
+
+    def segmenterMetricAtThreshold(self, classToThreshold, probabilityThresholds, metric="dice_coeff"):
+        """A function to return the pixel-level metric of a class probability
+        threshold (or list of thresholds) compared to the ground truth, where a
+        pixel with ground truth annotation overlap greater than or equal to
+        probabilityThresholds is considered to be ground truth positive
+        for that class. Ground truth annotations are expected to have been added
+        to each tile in the tile dictionary by addAnnotations(). Class probability
+        labels are expected to have been added to each tile in the tile dictionary
+        by inferSegmenter(). The only metric currently available is the Dice
+        coefficient. The metric will be applied to all tiles with predictions
+        added by inferSegmenter() and the average of that metric across those
+        tiles will be returned to give one metric per slide per threshold in
+        probabilityThresholds.
+
+        Args:
+            classToThreshold (string): the class to threshold the pixels by. The class must be already present in the tile dictionary from inferSegmenter().
+            probabilityThresholds (float or list of floats): the probability threshold or list of probability thresholds (in the range 0 to 1) to check. If a float is provided, just that probability threshold will be used, and a float of the accuracy of the segmenter using that threshold as when the model considered a pixel positive for the class will be returned. If a list of floats is provided, a list of floats of accuracies for those thresholds will be returned in respective order the inputted threshold list will be returned.
+            metric (string, optional): which metric to compute. The only option currently available is 'dice_coeff'. Default is 'dice_coeff'.
+        """
+
+        if not hasattr(self, 'segmenterPredictionTileAddresses'):
+            foundPrediction = False
+            segmenterPredictionTileAddresses = []
+            for tileAddress, tileEntry in self.tileDictionary.items():
+                if 'segmenterInferencePrediction' in tileEntry:
+                    segmenterPredictionTileAddresses.append(tileAddress)
+                    foundPrediction = True
+            if foundPrediction:
+                self.segmenterPredictionTileAddresses = segmenterPredictionTileAddresses
+            else:
+                raise ValueError('No segmentation predictions found in Slide. Use inferSegmenter() to generate them.')
+
+        if not self.hasAnnotations():
+            print("Warning: no annotations found in Slide. All tiles in Slide will be assumed to be negative for "+classToThreshold+". Run addAnnotations() if there should be annotations in this Slide.")
+
+        if type(probabilityThresholds) in [float, int]:
+            pT = [probabilityThresholds]
+        elif type(probabilityThresholds) == list:
+            pT = probabilityThresholds
+        else:
+            raise ValueError('probabilityThresholds must be an int, float, or list of ints or floats')
+
+        metrics = []
+        ground_truth_masks_np = []
+
+        if metric == 'dice_coeff':
+            for predictionTileAddress in self.segmenterPredictionTileAddresses:
+                ground_truth_masks_np.append(self.getAnnotationTileMask(predictionTileAddress, classToThreshold, writeToNumpy=True, acceptTilesWithoutClass=True))
+                #ground_truth_mask = torch.from_numpy(self.getAnnotationTileMask(predictionTileAddress, classToThreshold, writeToNumpy=True, acceptTilesWithoutClass=True)).float()
+                #ground_truth_mask = torch.div(ground_truth_mask, 255) # getAnnotationTileMask outputs 0-255 arrays, so we need to normalize to be 0-1 range
+                #ground_truth_masks.append(ground_truth_mask)
+            print("finished making ground truth masks")
+
+            for probabilityThreshold in pT:
+                #binarized_prediction_masks = []
+                dice_scores_at_threshold = []
+                for i, predictionTileAddress in enumerate(self.segmenterPredictionTileAddresses):
+                    binarized_prediction_mask = (torch.from_numpy(self.tileDictionary[predictionTileAddress]['segmenterInferencePrediction'][classToThreshold]) > probabilityThreshold).float()
+                    ground_truth_mask_torch = torch.div(torch.from_numpy(ground_truth_masks_np[i]).float(), 255)
+                    dice_scores_at_threshold.append(dice_coeff(binarized_prediction_mask, ground_truth_mask_torch).item())
+
+                print("Mean Dice score at threshold "+str(probabilityThreshold)+":", np.mean(dice_scores_at_threshold))
+                metrics.append(np.mean(dice_scores_at_threshold))
+
+
+
+                #mean_dice_at_threshold = dice_coeff(torch.stack(binarized_prediction_masks), torch.stack(ground_truth_masks)).item()
+                #print("Mean Dice score at threshold "+str(probabilityThreshold)+":", mean_dice_at_threshold)
+                #metrics.append(mean_dice_at_threshold)
+
+
+
+
+
+
+
+
+            #for probabilityThreshold in pT:
+            #    tds = []
+            #    for predictionTileAddress in self.segmenterPredictionTileAddresses:
+                    #print(predictionTileAddress)
+            #        tds.append(self.getTileDiceScore(predictionTileAddress, classToThreshold, pixelBinarizationThreshold=probabilityThreshold))
+                    #print("Dice score:", tds)
+            #    metrics.append(np.mean(tds))
+            #    print("Average Dice score thresholding at "+str(probabilityThreshold)+":", np.mean(tds))
+        else:
+            raise ValueError("metric must be one of: 'dice_coeff'")
 
         if len(metrics) > 1:
             return metrics
