@@ -1,5 +1,7 @@
 numpy
 pyvips
+pandas
+geopandas
 scikit-image
 scikit-learn
 scipy

@@ -5,6 +5,8 @@ import torch
 from torchvision import transforms
 import numpy as np
 import pyvips as pv
+import pandas as pd
+import geopandas
 from PIL import Image, ImageDraw
 from joblib import Parallel, delayed
 from sklearn.metrics import accuracy_score, balanced_accuracy_score, f1_score, precision_score, recall_score
@@ -137,6 +139,11 @@ class Slide:
                 ys.append(adrs[1])
             self.numTilesInX = len(list(set(xs)))
             self.numTilesInY = len(list(set(ys)))
+
+            xs.sort()
+            tileSize_minus_tileOverlap = xs[1]-xs[0]
+            self.tileOverlap = self.tileSize - tileSize_minus_tileOverlap
+
             #self.setTilePropertiesFromPml(self.tileDictionary)
 
 # EXPERIMENTAL
@@ -198,15 +205,64 @@ class Slide:
 
     #def loadTileDictionary(self, dictionaryFilePath):
     #    pass
+    #'''
+    def getNonOverlappingSegmentationInferenceArray(self, className, aggregationMethod='average', probabilityThreshold=False, fillUninferredPixelsWithZeros='True'):
 
-    def getNonoverlappingSegmentationInferenceArray(self, aggregationMethod='average', padWithZeros='True'):
+        #if padWithZeros:
+        #    inference_array = np.zeros((self.slide.height, self.slide.width))
+        #else:
+        inference_array = np.empty((self.slide.height, self.slide.width), dtype=np.int8)
+        inference_array[:] = np.nan
+        num_merged_tiles = 0
 
-        if padWithZeros:
-            inference_array = np.zeros((self.slide.height, self.slide.width))
+        for tileAddress in self.iterateTiles():
+            if 'segmenterInferencePrediction' in self.tileDictionary[tileAddress]:
+                if className in self.tileDictionary[tileAddress]['segmenterInferencePrediction']:
+                    print("Merging tile prediction from ", tileAddress)
+                    tile_prediction_to_merge = self.tileDictionary[tileAddress]['segmenterInferencePrediction'][className]
+                    inference_array = self._mergeTilePredictionsIntoImageArray(inference_array, tile_prediction_to_merge, tileAddress)
+                    num_merged_tiles = num_merged_tiles + 1
+                else:
+                    raise ValueError(className+' not present in segmentation predictions.')
+
+        if num_merged_tiles == 0:
+            raise ValueError('No tiles found with segmentation predictions. Run inferSegmenter() to add them.')
+
+        if probabilityThreshold:
+            # note: this gets rid of NaN and turns them into False
+            with np.errstate(invalid='ignore'):
+                inference_array = inference_array > probabilityThreshold
+
+        if fillUninferredPixelsWithZeros:
+            return np.nan_to_num(inference_array)
         else:
-            inference_array = np.empty((self.slide.height, self.slide.width))
-            inference_array[:] = np.nan
+            return inference_array
 
+
+    def _mergeTilePredictionsIntoImageArray(self, inference_array, tile_prediction_to_merge, tile_address):
+
+        tile_x = self.tileDictionary[tile_address]['x']
+        tile_y = self.tileDictionary[tile_address]['y']
+        inference_subarray = inference_array[tile_y:tile_y+self.tileSize, tile_x:tile_x+self.tileSize]
+        if inference_subarray.shape != tile_prediction_to_merge.shape:
+            raise ValueError('tile_prediction_to_merge does not have the same shape as inference_subarray.')
+
+        new_inference_subarray = (inference_subarray + tile_prediction_to_merge) / 2
+        new_inference_subarray[np.isnan(new_inference_subarray)] = tile_prediction_to_merge[np.isnan(new_inference_subarray)]
+
+        new_inference_array = inference_array
+        new_inference_array[tile_y:tile_y+self.tileSize, tile_x:tile_x+self.tileSize] = new_inference_subarray
+        return new_inference_array
+
+
+
+
+
+
+
+
+
+        '''
         point_tuples = []
         for x in range(self.slide.width):
             for y in range(self.slide.height):
@@ -217,18 +273,47 @@ class Slide:
                                 'y': [point_tuple[1] for point_tuple in point_tuples]})
         pixels = geopandas.GeoDataFrame(pixels, geometry=geopandas.points_from_xy(pixels.x, pixels.y))
 
-        tiles =
+        tile_addresses = [tileAddress for tileAddress in self.iterateTiles()]
+
+        height = self.tileDictionary[address]['height']
+        #slideHeight = int(self.slideProperties['height'])
+        #x = self.tileDictionary[tileAddress]['x']
+        #y = self.tileDictionary[tileAddress]['y']
+        #tileBox = geometry.box(x, (slideHeight-y)-height, x+height, slideHeight-y)
+        tiles = pd.DataFrame({'address': tile_addresses,
+                                'polygons': [geometry.box(self.tileDictionary[tile_address]['x'],
+                                                            self.tileDictionary[tile_address]['y']-height,
+                                                            self.tileDictionary[tile_address]['x']+height,
+                                                            self.tileDictionary[tile_address]['y']) for tile_address in tile_addresses]})
+        tiles = geopandas.GeoDataFrame(tiles, geometry='polygons')
+
+        points_with_tiles = geopandas.sjoin(points, tiles, how='inner', op='intersects')
+        print(points_with_tiles.head())
+        quit()
 
         for y in range(self.slide.height):
             for x in range(self.slide.width):
                 inference_array[y,x] = self._inferencePixelValue(y, x, aggregationMethod=aggregationMethod)
 
         return inference_array
+        '''
+    #def _polygonsThatOverlapPoints(self, points_df, polygons_df):
+    #    points = geopandas.GeoDataFrame(points_df, geometry='pixel_point')
+    #    polygons = geopandas.GeoDataFrame(polygons_df, geometry='tile_polygon')
+    #    points_with_polygons = geopandas.sjoin(points, polygons, how='inner', op='intersects')
 
-    def _inferencePixelValue(self, y, x, aggregationMethod='average'):
+    #    points_with_polygons_dict = {}
+    #    for index, row in points_with_polygons.iterrows():
+    #        if row['pixel_tuple'] in points_with_polygons_dict:
+    #            points_with_polygons_dict[row['pixel_tuple']].append(row['tile_address'])
+    #        else:
+    #            points_with_polygons_dict[row['pixel_tuple']] = [row['tile_address']]
+
+    #    return points_with_polygons_dict
+
 
         # find which tiles in tile dictionary overlap pixel at height y and width x
-
+    #'''
 
 
     def detectForeground(self, level=4, overwriteExistingForegroundDetection=False, threshold=None):
@@ -2209,7 +2294,7 @@ class Slide:
             for predictionTileAddress in self.classifierPredictionTileAddresses:
 
                 if classToThreshold+'Overlap' not in self.tileDictionary[predictionTileAddress]:
-                    if assignZeroToTilesWithoutMetric:
+                    if assignZeroToTilesWithoutAnnotationOverlap:
                         ground_truths.append(0)
                     else:
                         raise ValueError(classToThreshold+' not found at tile '+str(predictionTileAddress))
