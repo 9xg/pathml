@@ -14,6 +14,7 @@ from skimage.transform import downscale_local_mean
 from skimage.filters import threshold_triangle, threshold_otsu
 from skimage.morphology import binary_dilation, remove_small_objects
 from scipy.ndimage.morphology import binary_fill_holes
+import scipy.sparse as sps
 from skimage.color import rgb2gray, rgb2lab
 from skimage.transform import resize
 import matplotlib.pyplot as plt
@@ -46,7 +47,7 @@ class Slide:
     from whole-slide images can be extracted.
 
     Args:
-        slideFilePath (string): path to a WSI (to make from scratch) or to a .pml file (to reload a saved Slide object, see saveSelf())
+        slideFilePath (string): path to a WSI (to make from scratch) or to a .pml file (to reload a saved Slide object, see save())
         newSlideFilePath (string, optional): if loading a .pml file and the location of the WSI has changed, the new path to WSI can be inputted here
         level (int, optional): the level of the WSI pyramid at which to operate on; 0 is the highest resolution and default and how many levels are present above that depends on the WSI
         verbose (Boolean, optional): whether to output a verbose output. Default is false.
@@ -81,7 +82,7 @@ class Slide:
     __verbosePrefix = '[PathML] '
 
     # If slideFilePath can be a path to a WSI (to make from scratch),
-    # or a path to a .pml file (to make from a pre-existing pathml Slide saved with saveSelf())
+    # or a path to a .pml file (to make from a pre-existing pathml Slide saved with save())
     def __init__(self, slideFilePath, newSlideFilePath=False, level=0, verbose=False):
 
         self.__verbose = verbose
@@ -206,24 +207,86 @@ class Slide:
     #def loadTileDictionary(self, dictionaryFilePath):
     #    pass
     #'''
-    def getNonOverlappingSegmentationInferenceArray(self, className, aggregationMethod='average', probabilityThreshold=False, fillUninferredPixelsWithZeros='True'):
+    def getNonOverlappingSegmentationInferenceArray(self, className, aggregationMethod='mean', probabilityThreshold=None, dtype='int', folder=os.getcwd()):#, fillUninferredPixelsWithZeros=True):
+        """A function to extract the pixel-wise inference result
+        (from inferClassifier()) of a Slide. Tile overlap is "stitched
+        together" to produce one mask with the same pixel dimensions as the WSI.
+        The resulting mask will be saved to a .npz file as a scipy csr sparse
+        matrix.
 
+        Args:
+            className (string): the name of the class to extract the binary mask for. Must be present in the tile dictionary from inferClassifier().
+            aggregationMethod (string, optional): the method used to combine inference results on a pixel when two inference tiles overlap on that pixel. Default is 'mean' and no other options are currently supported.
+            probabilityThreshold (float, optional): if defined, this is used as the cutoff above which a pixel is considered part of the class className. This will result in a binary mask of 1s and 0s being created. Default is to return a mask of 0-255 int predictions.
+            dtype (string, optional): the data type to store in the output matrix. Options are 'int' for numpy.uint8 (the default), 'float' for numpy.float32, or 'boolean' for 1s and 0s (requires probabilityThreshold to be defined)
+            folder (string, optional): the path to the directory where the scipy csr sparse will be saved. Default is the current working directory.
+
+        Example:
+            pathml_slide.getNonOverlappingSegmentationInferenceArray('metastasis', folder='path/to/folder')
+        """
         #if padWithZeros:
         #    inference_array = np.zeros((self.slide.height, self.slide.width))
         #else:
-        inference_array = np.empty((self.slide.height, self.slide.width), dtype=np.int8)
-        inference_array[:] = np.nan
+        # initialize empty sparse matrix
+        if dtype in ['int', 'boolean']:
+            inference_array = sps.csr_matrix((pathml_slide.slide.height, pathml_slide.slide.width), dtype=np.uint8)
+        elif dtype == 'float':
+            inference_array = sps.csr_matrix((pathml_slide.slide.height, pathml_slide.slide.width), dtype=np.float32)
+        else:
+            raise ValueError("dtype must be 'int', 'float', or 'boolean'")
+
+        # count number of times each pixel in inference tiles
+        inference_pixel_counts_array = sps.csr_matrix((pathml_slide.slide.height, pathml_slide.slide.width), dtype=np.uint8)
+
+        if (dtype == 'float') and probabilityThreshold:
+            raise ValueError("'dtype' must be 'boolean' for 'probabilityThreshold' to be defined.")
+        #print(inference_array)
+        #inference_array = np.empty((self.slide.height, self.slide.width), dtype=np.int8)
+        #inference_array[:] = np.nan
         num_merged_tiles = 0
 
         for tileAddress in self.iterateTiles():
             if 'segmenterInferencePrediction' in self.tileDictionary[tileAddress]:
                 if className in self.tileDictionary[tileAddress]['segmenterInferencePrediction']:
-                    print("Merging tile prediction from ", tileAddress)
-                    tile_prediction_to_merge = self.tileDictionary[tileAddress]['segmenterInferencePrediction'][className]
-                    inference_array = self._mergeTilePredictionsIntoImageArray(inference_array, tile_prediction_to_merge, tileAddress)
+                    #print("Merging tile prediction from ", tileAddress)
+                    tile_x = self.tileDictionary[tileAddress]['x']
+                    tile_y = self.tileDictionary[tileAddress]['y']
+
+                    tile_prediction = self.tileDictionary[tileAddress]['segmenterInferencePrediction'][className]
+
+                    if dtype == 'int':
+                        if np.max(tile_prediction) <= 1:
+                            tile_prediction = tile_prediction * 255
+                            tile_prediction = tile_prediction.astype(np.uint8)
+                    if dtype == 'float':
+                        if np.max(tile_prediction) > 1:
+                            tile_prediction = tile_prediction / 255
+
+                    inference_subarray = inference_array[tile_y:tile_y+pathml_slide.tileSize, tile_x:tile_x+pathml_slide.tileSize]
+                    inference_subarray = inference_subarray.toarray()
+
+                    #inference_pixel_counts_subarray = inference_pixel_counts_array[tile_y:tile_y+pathml_slide.tileSize, tile_x:tile_x+pathml_slide.tileSize]
+                    #inference_pixel_counts_subarray = inference_pixel_counts_subarray.toarray()
+
+                    if aggregationMethod == 'mean':
+                        new_inference_subarray = inference_subarray + tile_prediction
+                    else:
+                        raise ValueError("aggregationMethod must be 'mean'")
+
+                    new_inference_subarray[inference_subarray == 0] = tile_prediction[inference_subarray == 0]
+                    new_inference_subarray = new_inference_subarray.astype(np.uint8)
+
+                    inference_array[tile_y:tile_y+pathml_slide.tileSize, tile_x:tile_x+pathml_slide.tileSize] = new_inference_subarray
+                    inference_pixel_counts_array[tile_y:tile_y+pathml_slide.tileSize, tile_x:tile_x+pathml_slide.tileSize] = inference_pixel_counts_array[tile_y:tile_y+pathml_slide.tileSize, tile_x:tile_x+pathml_slide.tileSize] + 1
+
+                    #inference_array = self._mergeTilePredictionsIntoImageArray(inference_array, tile_prediction_to_merge, tileAddress)
                     num_merged_tiles = num_merged_tiles + 1
                 else:
                     raise ValueError(className+' not present in segmentation predictions.')
+
+        # Now take the average of each pixel for how many times it appeared
+        # question: will this make a float matrix? if so that is bad
+        inference_array = inference_array / inference_pixel_counts_array
 
         if num_merged_tiles == 0:
             raise ValueError('No tiles found with segmentation predictions. Run inferSegmenter() to add them.')
@@ -231,72 +294,70 @@ class Slide:
         if probabilityThreshold:
             # note: this gets rid of NaN and turns them into False
             with np.errstate(invalid='ignore'):
-                inference_array = inference_array > probabilityThreshold
+                if dtype == 'int':
+                    inference_array = inference_array > (probabilityThreshold * 255)
+                else:
+                    inference_array = inference_array > probabilityThreshold
 
-        if fillUninferredPixelsWithZeros:
-            return np.nan_to_num(inference_array)
-        else:
-            return inference_array
+        sps.save_npz(os.path.join(folder, self.slideFileName+'.npz'), inference_array)
 
-
-    def _mergeTilePredictionsIntoImageArray(self, inference_array, tile_prediction_to_merge, tile_address):
-
-        tile_x = self.tileDictionary[tile_address]['x']
-        tile_y = self.tileDictionary[tile_address]['y']
-        inference_subarray = inference_array[tile_y:tile_y+self.tileSize, tile_x:tile_x+self.tileSize]
-        if inference_subarray.shape != tile_prediction_to_merge.shape:
-            raise ValueError('tile_prediction_to_merge does not have the same shape as inference_subarray.')
-
-        new_inference_subarray = (inference_subarray + tile_prediction_to_merge) / 2
-        new_inference_subarray[np.isnan(new_inference_subarray)] = tile_prediction_to_merge[np.isnan(new_inference_subarray)]
-
-        new_inference_array = inference_array
-        new_inference_array[tile_y:tile_y+self.tileSize, tile_x:tile_x+self.tileSize] = new_inference_subarray
-        return new_inference_array
+        #if fillUninferredPixelsWithZeros:
+        #    return np.nan_to_num(inference_array)
+        #else:
+            #return inference_array
 
 
+    #def _mergeTilePredictionsIntoImageArray(self, inference_array, tile_prediction_to_merge, tile_address):
+
+    #    tile_x = self.tileDictionary[tile_address]['x']
+    #    tile_y = self.tileDictionary[tile_address]['y']
+    #    inference_subarray = inference_array[tile_y:tile_y+self.tileSize, tile_x:tile_x+self.tileSize]
+    #    if inference_subarray.shape != tile_prediction_to_merge.shape:
+    #        raise ValueError('tile_prediction_to_merge does not have the same shape as inference_subarray.')
+
+    #    new_inference_subarray = (inference_subarray + tile_prediction_to_merge) / 2
+    #    new_inference_subarray[np.isnan(new_inference_subarray)] = tile_prediction_to_merge[np.isnan(new_inference_subarray)]
+
+    #    new_inference_array = inference_array
+    #    new_inference_array[tile_y:tile_y+self.tileSize, tile_x:tile_x+self.tileSize] = new_inference_subarray
+    #    return new_inference_array
 
 
+        #'''
+        #point_tuples = []
+        #for x in range(self.slide.width):
+        #    for y in range(self.slide.height):
+        #        point_tuples.append((x,y))
 
+        #pixels = pd.DataFrame({'xy_tuple': point_tuples,
+        #                        'x': [point_tuple[0] for point_tuple in point_tuples],
+        #                        'y': [point_tuple[1] for point_tuple in point_tuples]})
+        #pixels = geopandas.GeoDataFrame(pixels, geometry=geopandas.points_from_xy(pixels.x, pixels.y))
 
+        #tile_addresses = [tileAddress for tileAddress in self.iterateTiles()]
 
-
-
-        '''
-        point_tuples = []
-        for x in range(self.slide.width):
-            for y in range(self.slide.height):
-                point_tuples.append((x,y))
-
-        pixels = pd.DataFrame({'xy_tuple': point_tuples,
-                                'x': [point_tuple[0] for point_tuple in point_tuples],
-                                'y': [point_tuple[1] for point_tuple in point_tuples]})
-        pixels = geopandas.GeoDataFrame(pixels, geometry=geopandas.points_from_xy(pixels.x, pixels.y))
-
-        tile_addresses = [tileAddress for tileAddress in self.iterateTiles()]
-
-        height = self.tileDictionary[address]['height']
+        #height = self.tileDictionary[address]['height']
         #slideHeight = int(self.slideProperties['height'])
         #x = self.tileDictionary[tileAddress]['x']
         #y = self.tileDictionary[tileAddress]['y']
         #tileBox = geometry.box(x, (slideHeight-y)-height, x+height, slideHeight-y)
-        tiles = pd.DataFrame({'address': tile_addresses,
-                                'polygons': [geometry.box(self.tileDictionary[tile_address]['x'],
-                                                            self.tileDictionary[tile_address]['y']-height,
-                                                            self.tileDictionary[tile_address]['x']+height,
-                                                            self.tileDictionary[tile_address]['y']) for tile_address in tile_addresses]})
-        tiles = geopandas.GeoDataFrame(tiles, geometry='polygons')
+        #tiles = pd.DataFrame({'address': tile_addresses,
+        #                        'polygons': [geometry.box(self.tileDictionary[tile_address]['x'],
+        #                                                    self.tileDictionary[tile_address]['y']-height,
+        #                                                    self.tileDictionary[tile_address]['x']+height,
+        #                                                    self.tileDictionary[tile_address]['y']) for tile_address in tile_addresses]})
+        #tiles = geopandas.GeoDataFrame(tiles, geometry='polygons')
 
-        points_with_tiles = geopandas.sjoin(points, tiles, how='inner', op='intersects')
-        print(points_with_tiles.head())
-        quit()
+        #points_with_tiles = geopandas.sjoin(points, tiles, how='inner', op='intersects')
+        #print(points_with_tiles.head())
+        #quit()
 
-        for y in range(self.slide.height):
-            for x in range(self.slide.width):
-                inference_array[y,x] = self._inferencePixelValue(y, x, aggregationMethod=aggregationMethod)
+        #for y in range(self.slide.height):
+        #    for x in range(self.slide.width):
+        #        inference_array[y,x] = self._inferencePixelValue(y, x, aggregationMethod=aggregationMethod)
 
-        return inference_array
-        '''
+        #return inference_array
+        #'''
     #def _polygonsThatOverlapPoints(self, points_df, polygons_df):
     #    points = geopandas.GeoDataFrame(points_df, geometry='pixel_point')
     #    polygons = geopandas.GeoDataFrame(polygons_df, geometry='tile_polygon')
@@ -475,7 +536,7 @@ class Slide:
     def saveTileDictionary(self, fileName=False, folder=os.getcwd()):
         """A function to save just the tileDictionary attribute of a Slide
         object into a pickled file. Note that these pickled files cannot be used
-        as an input when initializing a Slide object; please use saveSelf()
+        as an input when initializing a Slide object; please use save()
         instead.
 
         Args:
@@ -497,7 +558,7 @@ class Slide:
 
         pickle.dump(self.tileDictionary, open(os.path.join(folder, id)+'.pml', 'wb'))
 
-    def saveSelf(self, fileName=False, folder=os.getcwd()):
+    def save(self, fileName=False, folder=os.getcwd()):
         """A function to save a pickled PathML Slide object to a .pml file for re-use later
         (re-loading is performed by providing the path to the .pml file when initializing a Slide object).
         This function should be re-run after each major step in an analysis on a Slide.
@@ -507,7 +568,7 @@ class Slide:
             folder (string, optional): the path to the directory where the pickled Slide will be saved. Default is the current working directory.
 
         Example:
-            pathml_slide.saveSelf("pathml_slide" folder="/path/to/pathml_slides")
+            pathml_slide.save("pathml_slide" folder="/path/to/pathml_slides")
         """
 
         if not self.hasTileDictionary():
@@ -1080,7 +1141,7 @@ class Slide:
             numTilesToExtractPerClass (dict or int or 'all', optional): expected to be positive integer, a dictionary with class names as keys and positive integers as values, or 'all' to extract all suitable tiles for each class. Default is 'all'.
             classesToExtract (string or list of strings, optional): defaults to extracting all classes found in the annotations, but if defined, must be a string or a list of strings of class names.
             otherClassNames (string or list of strings, optional): if defined, creates an empty class directory alongside the unannotated class directory for each class name in the list (or string) for torch ImageFolder purposes
-            extractSegmentationMasks (Boolean, optional): whether to extract a 'masks' directory that is exactly parallel to the 'tiles' directory, and contains binary segmentation mask tiles for each class desired. Default is False.
+            extractSegmentationMasks (Boolean, optional): whether to extract a 'masks' directory that is exactly parallel to the 'tiles' directory, and contains binary segmentation mask tiles for each class desired. Pixel values of 255 in these masks appear as white and indicate the presence of the class; pixel values of 0 appear as black and indicate the absence of the class. Default is False.
             tileAnnotationOverlapThreshold (float, optional): a number greater than 0 and less than or equal to 1, or a dictionary of such values, with a key for each class to extract. The numbers specify the minimum fraction of a tile's area that overlaps a given class's annotations for it to be extracted. Default is 0.5.
             foregroundLevelThreshold (string or int or float, optional): if defined as an int, only extracts tiles with a 0-100 foregroundLevel value less or equal to than the set value (0 is a black tile, 100 is a white tile). Only includes Otsu's method-passing tiles if set to 'otsu', or triangle algorithm-passing tiles if set to 'triangle'. Default is not to filter on foreground at all.
             tissueLevelThreshold (Boolean, optional): if defined, only extracts tiles with a 0 to 1 tissueLevel probability greater than or equal to the set value. Default is False.
@@ -1389,7 +1450,7 @@ class Slide:
             numTilesToExtract (int, optional): the number of random unannotated tiles to extract. Default is 50.
             unannotatedClassName (string, optional): the name that the unannotated "class" directory should be called. Default is "unannotated".
             otherClassNames (string or list of strings, optional): if defined, creates an empty class directory alongside the unannotated class directory for each class name in the list (or string) for torch ImageFolder purposes
-            extractSegmentationMasks (Boolean, optional): whether to extract a 'masks' directory that is exactly parallel to the 'tiles' directory, and contains binary segmentation mask tiles for each class desired (these tiles will of course all be entirely black). Default is False.
+            extractSegmentationMasks (Boolean, optional): whether to extract a 'masks' directory that is exactly parallel to the 'tiles' directory, and contains binary segmentation mask tiles for each class desired (these tiles will of course all be entirely black, pixel values of 0). Default is False.
             foregroundLevelThreshold (string or int or float, optional): if defined as an int, only extracts tiles with a 0-100 foregroundLevel value less or equal to than the set value (0 is a black tile, 100 is a white tile). Only includes Otsu's method-passing tiles if set to 'otsu', or triangle algorithm-passing tiles if set to 'triangle'. Default is not to filter on foreground at all.
             tissueLevelThreshold (Boolean, optional): if defined, only extracts tiles with a 0 to 1 tissueLevel probability greater than or equal to the set value. Default is False.
             returnTileStats (Boolean, optional): whether to return the 0-1 normalized sum of channel values, the sum of the squares of channel values, and the number of tiles extracted for use in global mean and variance computation. Default is True.
@@ -1646,7 +1707,7 @@ class Slide:
         in the tile dictionary. The raw tissue detection map for a WSI is saved into
         a Slide attribute called rawTissueDetectionMap in the Slide which can be loaded
         into a new Slide object to save inference time with detectTissueFromRawTissueDetectionMap().
-        For this reason calling saveSelf() after detectTissue() finishes is recommended.
+        For this reason calling save() after detectTissue() finishes is recommended.
 
         Args:
             tissueDetectionLevel (int, optional): the level of the WSI pyramid at which to perform the tissue detection. Default is 1.
@@ -1858,7 +1919,7 @@ class Slide:
 
 ##########################################################
 
-    def inferSegmenter(self, trainedModel, classNames, dataTransforms=None, batchSize=1, numWorkers=16, foregroundLevelThreshold=False, tissueLevelThreshold=False, overwriteExistingSegmentations=False):#, saveInChunksAtFolder=False):
+    def inferSegmenter(self, trainedModel, classNames, dataTransforms=None, dtype='float', batchSize=1, numWorkers=16, foregroundLevelThreshold=False, tissueLevelThreshold=False, overwriteExistingSegmentations=False):#, saveInChunksAtFolder=False):
         """A function to infer a trained segmentation model on a Slide object using
         PyTorch.
 
@@ -1866,6 +1927,7 @@ class Slide:
             trainedModel (torchvision.models): A PyTorch segmentation model that has been trained for the segmentation task desired for inference.
             classNames (list of strings): a list of class names. The first class name is expected to correspond with the first channel of the output mask image, the second with the second, and so on.
             dataTransforms (torchvision.transforms.Compose): a PyTorch torchvision.Compose object with the desired data transformations.
+            dtype (string, optional): if 'float', saves the pixel probabilities as 0-1 numpy.float32 values; if 'int', saves the pixel probabilities as 0-255 numpy.uint8 values (these make for much more memory efficient Slide objects). Default is 'float'.
             batchSize (int, optional): the number of tiles to use in each inference minibatch.
             numWorkers (int, optional): the number of workers to use when inferring the model on the WSI
             foregroundLevelThreshold (string or int or float, optional): if defined as an int, only infers trainedModel on tiles with a 0-100 foregroundLevel value less or equal to than the set value (0 is a black tile, 100 is a white tile). Only infers on Otsu's method-passing tiles if set to 'otsu', or triangle algorithm-passing tiles if set to 'triangle'. Default is not to filter on foreground at all.
@@ -1963,10 +2025,20 @@ class Slide:
                 segmentation_masks = {}
 
                 if len(full_mask.shape) == 2: # only one output class
-                    segmentation_masks[classNames[0]] = full_mask
+                    if dtype == 'int':
+                        segmentation_masks[classNames[0]] = (full_mask * 255).astype(np.uint8)
+                    elif dtype == 'float':
+                        segmentation_masks[classNames[0]] = full_mask
+                    else:
+                        raise ValueError("'dtype' must be 'float' or 'int'")
                 else: # multiple output classes
                     for class_index in len(classNames):
-                        segmentation_masks[classNames[class_index]] = full_mask[class_index,...]
+                        if dtype == 'int':
+                            segmentation_masks[classNames[class_index]] = (full_mask[class_index,...] * 255).astype(np.uint8)
+                        elif dtype == 'float':
+                            segmentation_masks[classNames[class_index]] = full_mask[class_index,...]
+                        else:
+                            raise ValueError("'dtype' must be 'float' or 'int'")
 
                 #if saveInChunksAtFolder:
                 #    if not 'segmenterInferencePrediction' in self.tileDictionary[tileAddress]:
@@ -1978,7 +2050,7 @@ class Slide:
                 #counter = counter + 1
                 #if saveInChunksAtFolder:
                 #    if len(counter) > 1000
-                #    self.saveSelf(folder=saveInChunksAtFolder)
+                #    self.save(folder=saveInChunksAtFolder)
                 #    counter = 0
 
         if len(segmenterPredictionTileAddresses) > 0:
@@ -2019,6 +2091,8 @@ class Slide:
         binarized_prediction_mask = (torch.from_numpy(self.tileDictionary[tileAddress]['segmenterInferencePrediction'][className]) > pixelBinarizationThreshold).float()
         # we set acceptTilesWithoutClass to True so that we will get blank masks for negative slides
         ground_truth_mask = torch.from_numpy(self.getAnnotationTileMask(tileAddress, className, writeToNumpy=True, acceptTilesWithoutClass=True)).float()
+        if np.max(ground_truth_mask) > 1:
+            ground_truth_mask = ground_truth_mask / 255
         ground_truth_mask = torch.div(ground_truth_mask, 255) # getAnnotationTileMask outputs 0-255 arrays, so we need to normalize to be 0-1 range
         #print("mean of ground truth mask:", torch.mean(ground_truth_mask))
         return dice_coeff(binarized_prediction_mask, ground_truth_mask).item()
@@ -2119,9 +2193,59 @@ class Slide:
         plt.title(self.slideFileName+"\n"+classToVisualize)
         if folder:
             os.makedirs(os.path.join(folder, self.slideFileName), exist_okay=True)
-            plt.savefig(os.path.join(folder, self.slideFileName, self.slideFileName+"_"+classToVisualize+".png"))
+            plt.savefig(os.path.join(folder, self.slideFileName, self.slideFileName+"_classification_of_"+classToVisualize+".png"))
         else:
             plt.show(block=False)
+
+
+
+    def visualizeSegmenterInference(self, classToVisualize, probabilityThreshold=None, folder=False, level=4):
+        """A function to create an inference map image of a Slide after running
+        inferSegmenter() on it. Tiles are shown with the averageof the probabilities
+        of all their pixels. To get a pixel-level probability matrix, use
+        getNonOverlappingSegmentationInferenceArray().
+
+        Args:
+            #inferenceMatrix (string): the path to the .npz file containing the inference matrix (created with getNonOverlappingSegmentationInferenceArray()).
+            classToVisualize (string): the class to make an inference map image for. This class must be present in the tile dictionary from inferSegmenter().
+            probabilityThreshold (float, optional): before plotting the map, binarize the inference matrix's predictions at this 0 to 1 probability threshold so that only pixels at or above the threshold will considered positive for the class of interest, and the others negative. Default is to plot the raw values in the inference matrix without thresholding.
+            folder (string, optional): the path to the directory where the map will be saved; if it is not defined, then the map will only be shown and not saved.
+            level (int, optional): the level of the WSI pyramid to make the inference map image from.
+
+        Example:
+            pathml_slide.visualizeSegmenterInference('metastasis', folder='path/to/folder')
+        """
+
+        ourNewImg = self.thumbnail(level=level)
+        classMask = np.zeros((self.numTilesInX, self.numTilesInY)[::-1])
+
+        #if not hasattr(self, 'segmenterPredictionTileAddresses'):
+        foundPrediction = False
+        for tileAddress, tileEntry in self.tileDictionary.items():
+            if 'segmenterInferencePrediction' in tileEntry:
+                if classToVisualize in tileEntry['segmenterInferencePrediction']:
+                    classMask[tileAddress[1],tileAddress[0]] = np.mean(tileEntry['segmenterInferencePrediction'][classToVisualize])
+                    foundPrediction = True
+                else:
+                    raise ValueError(classToVisualize+' not in segmenterInferencePrediction')
+            else:
+                classMask[tileAddress[1],tileAddress[0]] = 0
+        if not foundPrediction:
+            raise ValueError('No predictions found in slide. Use inferSegmenter() to generate them.')
+
+        plt.figure()
+        plt.imshow(resize(ourNewImg, classMask.shape))
+        plt.imshow(classMask, cmap='plasma', alpha=0.3, vmin=0, vmax=1.0)
+        plt.colorbar()
+        plt.title(self.slideFileName+"\n"+classToVisualize)
+        if folder:
+            os.makedirs(os.path.join(folder, self.slideFileName), exist_okay=True)
+            plt.savefig(os.path.join(folder, self.slideFileName, self.slideFileName+"_segmentation_of_"+classToVisualize+".png"))
+        else:
+            plt.show(block=False)
+
+
+
 
     def visualizeThumbnail(self, folder=False, level=4):
         """A function to create a low-resolution image of the WSI stored in a
@@ -2387,7 +2511,10 @@ class Slide:
                 #binarized_prediction_masks = []
                 dice_scores_at_threshold = []
                 for i, predictionTileAddress in enumerate(self.segmenterPredictionTileAddresses):
-                    binarized_prediction_mask = (torch.from_numpy(self.tileDictionary[predictionTileAddress]['segmenterInferencePrediction'][classToThreshold]) > probabilityThreshold).float()
+                    inf_tile = self.tileDictionary[predictionTileAddress]['segmenterInferencePrediction'][classToThreshold]
+                    if np.max(inf_tile) > 1:
+                        inf_tile = inf_tile / 255
+                    binarized_prediction_mask = (torch.from_numpy(inf_tile) > probabilityThreshold).float()
                     ground_truth_mask_torch = torch.div(torch.from_numpy(ground_truth_masks_np[i]).float(), 255)
                     dice_scores_at_threshold.append(dice_coeff(binarized_prediction_mask, ground_truth_mask_torch).item())
 
