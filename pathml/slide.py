@@ -211,15 +211,14 @@ class Slide:
         """A function to extract the pixel-wise inference result
         (from inferClassifier()) of a Slide. Tile overlap is "stitched
         together" to produce one mask with the same pixel dimensions as the WSI.
-        The resulting mask will be saved to a .npz file as a scipy csr sparse
-        matrix.
+        The resulting mask will be saved to a .npz file as a scipy.sparse.lil_matrix.
 
         Args:
             className (string): the name of the class to extract the binary mask for. Must be present in the tile dictionary from inferClassifier().
             aggregationMethod (string, optional): the method used to combine inference results on a pixel when two inference tiles overlap on that pixel. Default is 'mean' and no other options are currently supported.
-            probabilityThreshold (float, optional): if defined, this is used as the cutoff above which a pixel is considered part of the class className. This will result in a binary mask of 1s and 0s being created. Default is to return a mask of 0-255 int predictions.
-            dtype (string, optional): the data type to store in the output matrix. Options are 'int' for numpy.uint8 (the default), 'float' for numpy.float32, or 'boolean' for 1s and 0s (requires probabilityThreshold to be defined)
-            folder (string, optional): the path to the directory where the scipy csr sparse will be saved. Default is the current working directory.
+            probabilityThreshold (float, optional): if defined, this is used as the cutoff above which a pixel is considered part of the class className. This will result in a binary mask of Trues and Falses being created. Default is to return a mask of 0-255 int predictions.
+            dtype (string, optional): the data type to store in the output matrix. Options are 'int' for numpy.uint8 (the default), 'float' for numpy.float32. To get a Boolean output using a probability threshold, set a value for probabilityThreshold.
+            folder (string, optional): the path to the directory where the scipy.sparse.lil_matrix will be saved. Default is the current working directory.
 
         Example:
             pathml_slide.getNonOverlappingSegmentationInferenceArray('metastasis', folder='path/to/folder')
@@ -228,18 +227,18 @@ class Slide:
         #    inference_array = np.zeros((self.slide.height, self.slide.width))
         #else:
         # initialize empty sparse matrix
-        if dtype in ['int', 'boolean']:
-            inference_array = sps.csr_matrix((pathml_slide.slide.height, pathml_slide.slide.width), dtype=np.uint8)
+        if dtype == 'int':
+            inference_array = sps.lil_matrix((self.slide.height, self.slide.width), dtype=np.uint8)
         elif dtype == 'float':
-            inference_array = sps.csr_matrix((pathml_slide.slide.height, pathml_slide.slide.width), dtype=np.float32)
+            inference_array = sps.lil_matrix((self.slide.height, self.slide.width), dtype=np.float32)
         else:
-            raise ValueError("dtype must be 'int', 'float', or 'boolean'")
+            raise ValueError("dtype must be 'int' or 'float'")
 
         # count number of times each pixel in inference tiles
-        inference_pixel_counts_array = sps.csr_matrix((pathml_slide.slide.height, pathml_slide.slide.width), dtype=np.uint8)
+        inference_pixel_counts_array = sps.lil_matrix((self.slide.height, self.slide.width), dtype=np.uint8)
 
-        if (dtype == 'float') and probabilityThreshold:
-            raise ValueError("'dtype' must be 'boolean' for 'probabilityThreshold' to be defined.")
+        #if (dtype == 'float') and probabilityThreshold:
+        #    raise ValueError("'dtype' must be 'boolean' for 'probabilityThreshold' to be defined.")
         #print(inference_array)
         #inference_array = np.empty((self.slide.height, self.slide.width), dtype=np.int8)
         #inference_array[:] = np.nan
@@ -262,10 +261,10 @@ class Slide:
                         if np.max(tile_prediction) > 1:
                             tile_prediction = tile_prediction / 255
 
-                    inference_subarray = inference_array[tile_y:tile_y+pathml_slide.tileSize, tile_x:tile_x+pathml_slide.tileSize]
+                    inference_subarray = inference_array[tile_y:tile_y+self.tileSize, tile_x:tile_x+self.tileSize]
                     inference_subarray = inference_subarray.toarray()
 
-                    #inference_pixel_counts_subarray = inference_pixel_counts_array[tile_y:tile_y+pathml_slide.tileSize, tile_x:tile_x+pathml_slide.tileSize]
+                    #inference_pixel_counts_subarray = inference_pixel_counts_array[tile_y:tile_y+self.tileSize, tile_x:tile_x+self.tileSize]
                     #inference_pixel_counts_subarray = inference_pixel_counts_subarray.toarray()
 
                     if aggregationMethod == 'mean':
@@ -276,17 +275,18 @@ class Slide:
                     new_inference_subarray[inference_subarray == 0] = tile_prediction[inference_subarray == 0]
                     new_inference_subarray = new_inference_subarray.astype(np.uint8)
 
-                    inference_array[tile_y:tile_y+pathml_slide.tileSize, tile_x:tile_x+pathml_slide.tileSize] = new_inference_subarray
-                    inference_pixel_counts_array[tile_y:tile_y+pathml_slide.tileSize, tile_x:tile_x+pathml_slide.tileSize] = inference_pixel_counts_array[tile_y:tile_y+pathml_slide.tileSize, tile_x:tile_x+pathml_slide.tileSize] + 1
+                    inference_array[tile_y:tile_y+self.tileSize, tile_x:tile_x+self.tileSize] = new_inference_subarray
+                    inference_pixel_counts_array[tile_y:tile_y+self.tileSize, tile_x:tile_x+self.tileSize] = inference_pixel_counts_array[tile_y:tile_y+self.tileSize, tile_x:tile_x+self.tileSize].toarray() + 1
 
                     #inference_array = self._mergeTilePredictionsIntoImageArray(inference_array, tile_prediction_to_merge, tileAddress)
                     num_merged_tiles = num_merged_tiles + 1
+                    print('Number of tiles merged:', num_merged_tiles)
                 else:
                     raise ValueError(className+' not present in segmentation predictions.')
 
         # Now take the average of each pixel for how many times it appeared
         # question: will this make a float matrix? if so that is bad
-        inference_array = inference_array / inference_pixel_counts_array
+        inference_array = sps.lil_matrix(inference_array / inference_pixel_counts_array, dtype=np.uint8)
 
         if num_merged_tiles == 0:
             raise ValueError('No tiles found with segmentation predictions. Run inferSegmenter() to add them.')
@@ -2260,10 +2260,11 @@ class Slide:
         """
 
         ourNewImg = self.thumbnail(level=level)
-        classMask = np.zeros((self.numTilesInX, self.numTilesInY)[::-1])
+        #classMask = np.zeros((self.numTilesInX, self.numTilesInY)[::-1])
 
         plt.figure()
-        plt.imshow(resize(ourNewImg, classMask.shape))
+        #plt.imshow(resize(ourNewImg, classMask.shape))
+        plt.imshow(ourNewImg)
         plt.title(self.slideFileName)
         if folder:
             os.makedirs(os.path.join(folder, self.slideFileName), exist_okay=True)
