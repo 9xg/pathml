@@ -285,9 +285,7 @@ class Slide:
         if not overwriteExistingForegroundDetection and 'foregroundLevel' in self.tileDictionary[list(self.tileDictionary.keys())[0]]:
             raise Warning('Foreground already detected. Use overwriteExistingForegroundDetection to write over old detections.')
         # get low-level magnification
-        self.lowMagSlide = pv.Image.new_from_file(
-            self.slideFilePath, level=level)
-        # smallerImage = self.slide.resize(0.002)
+        self.lowMagSlide = pv.Image.new_from_file(self.slideFilePath, level=level)
         self.lowMagSlide = np.ndarray(buffer=self.lowMagSlide.write_to_memory(),
                                       dtype=self.__format_to_dtype[self.lowMagSlide.format],
                                       shape=[self.lowMagSlide.height, self.lowMagSlide.width, self.lowMagSlide.bands])
@@ -1458,10 +1456,11 @@ class Slide:
         """A function to generate a 3-color tissue detection map showing where
         on a WSI the deep tissue detector applied with detectTissue() artifact
         was found (red), where background was found (green), and where tissue
-        was found (blue).
+        was found (blue). The resulting image is saved at the following path:
+        folder/fileName/fileName_tissuedetection.png
 
         Args:
-            fileName (string, optional): the name of the file where the deep tissue detection inference map image will be saved, excluding an extension
+            fileName (string, optional): the name of the file where the deep tissue detection inference map image will be saved, excluding an extension. Default is self.slideFileName
             folder (string, optional): the path to the directory where the deep tissue detection inference map image will be saved. Default is the current working directory.
 
         Example:
@@ -1488,6 +1487,7 @@ class Slide:
         plt.imshow(map, cmap=mpl.colors.ListedColormap(['blue', 'yellow', 'red']))
         plt.title(id+"\n"+'deep tissue detection')
         if folder:
+            os.makedirs(os.path.join(folder, id), exist_ok=True)
             plt.savefig(os.path.join(folder, id+"_tissuedetection.png"))
         else:
             plt.show(block=False)
@@ -1784,18 +1784,29 @@ class Slide:
                 suitableTileAddresses.append(tA)
         return suitableTileAddresses
 
-    def visualizeClassifierInference(self, classToVisualize, folder=False, level=4):
+    def visualizeClassifierInference(self, classToVisualize, fileName=False, folder=os.getcwd(), level=4):
         """A function to create an inference map image of a Slide after running
-        inferClassifier() on it.
+        inferClassifier() on it. The resulting image is saved at the following path:
+        folder/fileName/fileName_classification_of_classToVisualize.png
 
         Args:
             classToVisualize (string): the class to make an inference map image for. This class must be present in the tile dictionary from inferClassifier().
-            folder (string, optional): the path to the directory where the map will be saved; if it is not defined, then the map will only be shown and not saved.
+            fileName (string, optional): the name of the file where the classification inference map image will be saved, excluding an extension. Default is self.slideFileName
+            folder (string, optional): the path to the directory where the map will be saved. Default is the current working directory.
             level (int, optional): the level of the WSI pyramid to make the inference map image from.
 
         Example:
             pathml_slide.visualizeClassifierInference("metastasis", folder="path/to/folder")
         """
+
+        # get case ID
+        if fileName:
+            if type(fileName) == str:
+                id = fileName
+            else:
+                raise ValueError('fileName must be a string')
+        else:
+            id = self.slideFileName
 
         ourNewImg = self.thumbnail(level=level)
         classMask = np.zeros((self.numTilesInX, self.numTilesInY)[::-1])
@@ -1817,29 +1828,40 @@ class Slide:
         plt.imshow(resize(ourNewImg, classMask.shape))
         plt.imshow(classMask, cmap='plasma', alpha=0.3, vmin=0, vmax=1.0)
         plt.colorbar()
-        plt.title(self.slideFileName+"\n"+classToVisualize)
+        plt.title(id+"\n"+classToVisualize)
         if folder:
-            os.makedirs(os.path.join(folder, self.slideFileName), exist_okay=True)
-            plt.savefig(os.path.join(folder, self.slideFileName, self.slideFileName+"_classification_of_"+classToVisualize+".png"))
+            os.makedirs(os.path.join(folder, id), exist_ok=True)
+            plt.savefig(os.path.join(folder, id, id+"_classification_of_"+classToVisualize+".png"))
         else:
             plt.show(block=False)
 
-    def visualizeSegmenterInference(self, classToVisualize, probabilityThreshold=None, folder=False, level=4):
+    def visualizeSegmenterInference(self, classToVisualize, probabilityThreshold=None, fileName=False, folder=os.getcwd(), level=4):
         """A function to create an inference map image of a Slide after running
         inferSegmenter() on it. Tiles are shown with the averageof the probabilities
         of all their pixels. To get a pixel-level probability matrix, use
-        getNonOverlappingSegmentationInferenceArray().
+        getNonOverlappingSegmentationInferenceArray(). The resulting image is saved
+        at the following path:
+        folder/fileName/fileName_segmentation_of_classToVisualize.png
 
         Args:
-            #inferenceMatrix (string): the path to the .npz file containing the inference matrix (created with getNonOverlappingSegmentationInferenceArray()).
             classToVisualize (string): the class to make an inference map image for. This class must be present in the tile dictionary from inferSegmenter().
             probabilityThreshold (float, optional): before plotting the map, binarize the inference matrix's predictions at this 0 to 1 probability threshold so that only pixels at or above the threshold will considered positive for the class of interest, and the others negative. Default is to plot the raw values in the inference matrix without thresholding.
-            folder (string, optional): the path to the directory where the map will be saved; if it is not defined, then the map will only be shown and not saved.
+            fileName (string, optional): the name of the file where the segmentation inference map image will be saved, excluding an extension. Default is self.slideFileName
+            folder (string, optional): the path to the directory where the map will be saved. Default is the current working directory.
             level (int, optional): the level of the WSI pyramid to make the inference map image from.
 
         Example:
             pathml_slide.visualizeSegmenterInference('metastasis', folder='path/to/folder')
         """
+
+        # get case ID
+        if fileName:
+            if type(fileName) == str:
+                id = fileName
+            else:
+                raise ValueError('fileName must be a string')
+        else:
+            id = self.slideFileName
 
         ourNewImg = self.thumbnail(level=level)
         classMask = np.zeros((self.numTilesInX, self.numTilesInY)[::-1])
@@ -1861,18 +1883,19 @@ class Slide:
         plt.imshow(resize(ourNewImg, classMask.shape))
         plt.imshow(classMask, cmap='plasma', alpha=0.3, vmin=0, vmax=1.0)
         plt.colorbar()
-        plt.title(self.slideFileName+"\n"+classToVisualize)
+        plt.title(id+"\n"+classToVisualize)
         if folder:
-            os.makedirs(os.path.join(folder, self.slideFileName), exist_okay=True)
-            plt.savefig(os.path.join(folder, self.slideFileName, self.slideFileName+"_segmentation_of_"+classToVisualize+".png"))
+            os.makedirs(os.path.join(folder, id), exist_ok=True)
+            plt.savefig(os.path.join(folder, id, id+"_segmentation_of_"+classToVisualize+".png"))
         else:
             plt.show(block=False)
 
-    def visualizeThumbnail(self, folder=False, level=4):
+    def visualizeThumbnail(self, fileName=False, folder=False, level=4):
         """A function to create a low-resolution image of the WSI stored in a
         Slide.
 
         Args:
+            fileName (string, optional): the name of the file where the deep tissue detection inference map image will be saved, excluding an extension.
             folder (string, optional): the path to the directory where the thumbnail image will be saved; if it is not defined, then the thumbnail image will only be shown with matplotlib.pyplot and not saved.
             level (int, optional): the level of the WSI pyramid to make the thumbnail image from. Higher numbers will result in a lower resolution thumbnail. Default is 4.
 
@@ -1880,24 +1903,35 @@ class Slide:
             pathml_slide.visualizeThumbnail(folder="path/to/folder")
         """
 
+        # get case ID
+        if fileName:
+            if type(fileName) == str:
+                id = fileName
+            else:
+                raise ValueError('fileName must be a string')
+        else:
+            id = self.slideFileName
+
         ourNewImg = self.thumbnail(level=level)
 
         plt.figure()
         plt.imshow(ourNewImg)
-        plt.title(self.slideFileName)
+        plt.title(id)
         if folder:
-            os.makedirs(os.path.join(folder, self.slideFileName), exist_okay=True)
-            plt.savefig(os.path.join(folder, self.slideFileName, self.slideFileName+"_thumbnail.png"))
+            os.makedirs(os.path.join(folder, id), exist_ok=True)
+            plt.savefig(os.path.join(folder, id, id+"_thumbnail.png"))
         else:
             plt.show(block=False)
 
-    def visualizeForeground(self, foregroundLevelThreshold, folder=False, colors=['#04F900', '#0000FE']):
+    def visualizeForeground(self, foregroundLevelThreshold, fileName=False, folder=os.getcwd(), colors=['#04F900', '#0000FE']):
         """A function to create a map image of a Slide after running
-        detectForeground() on it.
+        detectForeground() on it. The resulting image is saved at the following
+        path: folder/fileName/fileName_foregroundLevelThreshold_thresholded_foregrounddetection.png
 
         Args:
             foregroundLevelThreshold (string or int, optional): applies Otsu's method to find the threshold if set to 'otsu', the triangle algorithm to find the threshold if set to 'triangle', or simply uses the tiles at or above the minimum darkness intensity threshold specified if set as an int (0 is a pure black tile, 100 is a pure white tile). Default is not to filter the tile count this way. detectForeground() must be run first.
-            folder (string, optional): the path to the directory where the map will be saved; if it is not defined, then the map will only be shown and not saved.
+            fileName (string, optional): the name of the file where the foreground map image will be saved, excluding an extension. Default is self.slideFileName
+            folder (string, optional): the path to the directory where the map will be saved. Default is the current working directory.
             colors (list, optional): a list of length two containing the color for the background followed by the color for the foreground in the map image. Colors must be defined for use in matplotlib.imshow's cmap argument. Default is a light green (#04F900) for background and a dark blue (#0000FE) for foreground.
 
         Example:
@@ -1909,6 +1943,15 @@ class Slide:
                 'setTileProperties must be called before inferring a classifier')
         if 'foregroundLevel' not in self.tileDictionary[list(self.tileDictionary.keys())[0]]:
             raise PermissionError('Foreground detection must be performed with detectForeground() before tissueLevelThreshold can be defined')
+
+        # get case ID
+        if fileName:
+            if type(fileName) == str:
+                id = fileName
+            else:
+                raise ValueError('fileName must be a string')
+        else:
+            id = self.slideFileName
 
         foregroundMask = np.zeros((self.numTilesInX, self.numTilesInY)[::-1])
 
@@ -1927,8 +1970,8 @@ class Slide:
         plt.imshow(foregroundMask, cmap=mpl.colors.ListedColormap(colors))
         plt.title(self.slideFileName+"\n"+str(foregroundLevelThreshold)+" thresholded")
         if folder:
-            os.makedirs(os.path.join(folder, id), exist_okay=True)
-            plt.savefig(os.path.join(folder, id, id+str(foregroundLevelThreshold)+"_thresholded_foregrounddetection.png"))
+            os.makedirs(os.path.join(folder, id), exist_ok=True)
+            plt.savefig(os.path.join(folder, id, id+"_"+str(foregroundLevelThreshold)+"_thresholded_foregrounddetection.png"))
         else:
             plt.show(block=False)
 
@@ -2120,7 +2163,7 @@ class Slide:
 
                 print("Mean Dice score at threshold "+str(probabilityThreshold)+":", np.mean(dice_scores_at_threshold))
                 metrics.append(np.mean(dice_scores_at_threshold))
-                
+
         else:
             raise ValueError("metric must be one of: 'dice_coeff'")
 
