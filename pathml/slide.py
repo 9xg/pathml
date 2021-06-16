@@ -36,10 +36,10 @@ import pickle
 pv.cache_set_max(0)
 
 
-# EXPERIMENTAL
+
 def unwrap_self(arg, **kwarg):
     return Slide.square_int(*arg, **kwarg)
-# EXPERIMENTAL END
+
 class Slide:
     """The main class of PathML; a representation of whole-slide image containing
     dictionary of tiles, and upon which further analyses are added, including
@@ -145,9 +145,6 @@ class Slide:
             tileSize_minus_tileOverlap = xs[1]-xs[0]
             self.tileOverlap = self.tileSize - tileSize_minus_tileOverlap
 
-            #self.setTilePropertiesFromPml(self.tileDictionary)
-
-# EXPERIMENTAL
     def square_int(self, i):
         return self.getTile((0,0),writeToNumpy=True)
 
@@ -156,7 +153,7 @@ class Slide:
         results = Parallel(n_jobs= -1, backend="threading")\
             (delayed(unwrap_self)(i) for i in tqdm(zip([self]*len(num), num), total = len(num)))
         print(results)
-# EXPERIMENTAL END
+
     def setTileProperties(self, tileSize, tileOverlap=0, unit='px'):
         """A function to set the properties of the tile dictionary in a Slide object.
         Should be the first function called on a newly created Slide object.
@@ -170,8 +167,6 @@ class Slide:
             pathml_slide.setTileProperties(400)
         """
 
-        # TODO: Implement units for tile size selection
-        # TODO: Implement padding of boundary tiles
         self.regionWorker = pv.Region.new(self.slide)
         self.tileOverlap = round(tileOverlap * tileSize)
         self.tileSize = tileSize
@@ -191,22 +186,6 @@ class Slide:
                                              'height': self.tileSize}
         return self
 
-    # internal function to do some housekeeping if creating Slide from a .pml file
-    #def setTilePropertiesFromPml(self):
-        #self.tileDictionary = tileDictionary
-    #    self.regionWorker = pv.Region.new(self.slide)
-    #    self.tileSize = self.tileDictionary[list(self.tileDictionary.keys())[0]]['height']
-    #    xs = []
-    #    ys = []
-    #    for adrs in self.iterateTiles():
-    #        xs.append(adrs[0])
-    #        ys.append(adrs[1])
-    #    self.numTilesInX = len(list(set(xs)))
-    #    self.numTilesInY = len(list(set(ys)))
-
-    #def loadTileDictionary(self, dictionaryFilePath):
-    #    pass
-    #'''
     def getNonOverlappingSegmentationInferenceArray(self, className, aggregationMethod='mean', probabilityThreshold=None, dtype='int', folder=os.getcwd()):#, fillUninferredPixelsWithZeros=True):
         """A function to extract the pixel-wise inference result
         (from inferClassifier()) of a Slide. Tile overlap is "stitched
@@ -223,10 +202,7 @@ class Slide:
         Example:
             pathml_slide.getNonOverlappingSegmentationInferenceArray('metastasis', folder='path/to/folder')
         """
-        #if padWithZeros:
-        #    inference_array = np.zeros((self.slide.height, self.slide.width))
-        #else:
-        # initialize empty sparse matrix
+
         if dtype == 'int':
             inference_array = sps.lil_matrix((self.slide.height, self.slide.width), dtype=np.uint8)
         elif dtype == 'float':
@@ -237,17 +213,11 @@ class Slide:
         # count number of times each pixel in inference tiles
         inference_pixel_counts_array = sps.lil_matrix((self.slide.height, self.slide.width), dtype=np.uint8)
 
-        #if (dtype == 'float') and probabilityThreshold:
-        #    raise ValueError("'dtype' must be 'boolean' for 'probabilityThreshold' to be defined.")
-        #print(inference_array)
-        #inference_array = np.empty((self.slide.height, self.slide.width), dtype=np.int8)
-        #inference_array[:] = np.nan
         num_merged_tiles = 0
 
         for tileAddress in self.iterateTiles():
             if 'segmenterInferencePrediction' in self.tileDictionary[tileAddress]:
                 if className in self.tileDictionary[tileAddress]['segmenterInferencePrediction']:
-                    #print("Merging tile prediction from ", tileAddress)
                     tile_x = self.tileDictionary[tileAddress]['x']
                     tile_y = self.tileDictionary[tileAddress]['y']
 
@@ -264,9 +234,6 @@ class Slide:
                     inference_subarray = inference_array[tile_y:tile_y+self.tileSize, tile_x:tile_x+self.tileSize]
                     inference_subarray = inference_subarray.toarray()
 
-                    #inference_pixel_counts_subarray = inference_pixel_counts_array[tile_y:tile_y+self.tileSize, tile_x:tile_x+self.tileSize]
-                    #inference_pixel_counts_subarray = inference_pixel_counts_subarray.toarray()
-
                     if aggregationMethod == 'mean':
                         new_inference_subarray = inference_subarray + tile_prediction
                     else:
@@ -278,14 +245,12 @@ class Slide:
                     inference_array[tile_y:tile_y+self.tileSize, tile_x:tile_x+self.tileSize] = new_inference_subarray
                     inference_pixel_counts_array[tile_y:tile_y+self.tileSize, tile_x:tile_x+self.tileSize] = inference_pixel_counts_array[tile_y:tile_y+self.tileSize, tile_x:tile_x+self.tileSize].toarray() + 1
 
-                    #inference_array = self._mergeTilePredictionsIntoImageArray(inference_array, tile_prediction_to_merge, tileAddress)
                     num_merged_tiles = num_merged_tiles + 1
                     print('Number of tiles merged:', num_merged_tiles)
                 else:
                     raise ValueError(className+' not present in segmentation predictions.')
 
         # Now take the average of each pixel for how many times it appeared
-        # question: will this make a float matrix? if so that is bad
         inference_array = sps.lil_matrix(inference_array / inference_pixel_counts_array, dtype=np.uint8)
 
         if num_merged_tiles == 0:
@@ -300,82 +265,6 @@ class Slide:
                     inference_array = inference_array > probabilityThreshold
 
         sps.save_npz(os.path.join(folder, self.slideFileName+'.npz'), inference_array)
-
-        #if fillUninferredPixelsWithZeros:
-        #    return np.nan_to_num(inference_array)
-        #else:
-            #return inference_array
-
-
-    #def _mergeTilePredictionsIntoImageArray(self, inference_array, tile_prediction_to_merge, tile_address):
-
-    #    tile_x = self.tileDictionary[tile_address]['x']
-    #    tile_y = self.tileDictionary[tile_address]['y']
-    #    inference_subarray = inference_array[tile_y:tile_y+self.tileSize, tile_x:tile_x+self.tileSize]
-    #    if inference_subarray.shape != tile_prediction_to_merge.shape:
-    #        raise ValueError('tile_prediction_to_merge does not have the same shape as inference_subarray.')
-
-    #    new_inference_subarray = (inference_subarray + tile_prediction_to_merge) / 2
-    #    new_inference_subarray[np.isnan(new_inference_subarray)] = tile_prediction_to_merge[np.isnan(new_inference_subarray)]
-
-    #    new_inference_array = inference_array
-    #    new_inference_array[tile_y:tile_y+self.tileSize, tile_x:tile_x+self.tileSize] = new_inference_subarray
-    #    return new_inference_array
-
-
-        #'''
-        #point_tuples = []
-        #for x in range(self.slide.width):
-        #    for y in range(self.slide.height):
-        #        point_tuples.append((x,y))
-
-        #pixels = pd.DataFrame({'xy_tuple': point_tuples,
-        #                        'x': [point_tuple[0] for point_tuple in point_tuples],
-        #                        'y': [point_tuple[1] for point_tuple in point_tuples]})
-        #pixels = geopandas.GeoDataFrame(pixels, geometry=geopandas.points_from_xy(pixels.x, pixels.y))
-
-        #tile_addresses = [tileAddress for tileAddress in self.iterateTiles()]
-
-        #height = self.tileDictionary[address]['height']
-        #slideHeight = int(self.slideProperties['height'])
-        #x = self.tileDictionary[tileAddress]['x']
-        #y = self.tileDictionary[tileAddress]['y']
-        #tileBox = geometry.box(x, (slideHeight-y)-height, x+height, slideHeight-y)
-        #tiles = pd.DataFrame({'address': tile_addresses,
-        #                        'polygons': [geometry.box(self.tileDictionary[tile_address]['x'],
-        #                                                    self.tileDictionary[tile_address]['y']-height,
-        #                                                    self.tileDictionary[tile_address]['x']+height,
-        #                                                    self.tileDictionary[tile_address]['y']) for tile_address in tile_addresses]})
-        #tiles = geopandas.GeoDataFrame(tiles, geometry='polygons')
-
-        #points_with_tiles = geopandas.sjoin(points, tiles, how='inner', op='intersects')
-        #print(points_with_tiles.head())
-        #quit()
-
-        #for y in range(self.slide.height):
-        #    for x in range(self.slide.width):
-        #        inference_array[y,x] = self._inferencePixelValue(y, x, aggregationMethod=aggregationMethod)
-
-        #return inference_array
-        #'''
-    #def _polygonsThatOverlapPoints(self, points_df, polygons_df):
-    #    points = geopandas.GeoDataFrame(points_df, geometry='pixel_point')
-    #    polygons = geopandas.GeoDataFrame(polygons_df, geometry='tile_polygon')
-    #    points_with_polygons = geopandas.sjoin(points, polygons, how='inner', op='intersects')
-
-    #    points_with_polygons_dict = {}
-    #    for index, row in points_with_polygons.iterrows():
-    #        if row['pixel_tuple'] in points_with_polygons_dict:
-    #            points_with_polygons_dict[row['pixel_tuple']].append(row['tile_address'])
-    #        else:
-    #            points_with_polygons_dict[row['pixel_tuple']] = [row['tile_address']]
-
-    #    return points_with_polygons_dict
-
-
-        # find which tiles in tile dictionary overlap pixel at height y and width x
-    #'''
-
 
     def detectForeground(self, level=4, overwriteExistingForegroundDetection=False, threshold=None):
         """A function to implement traditional foreground filtering methods on the
@@ -406,14 +295,8 @@ class Slide:
         self.lowMagSlide = rgb2lab(self.lowMagSlide[:, :, 0:3])[:, :, 0]
         downsampleFactor = self.slide.width / self.lowMagSlide.shape[1]
 
-        #if threshold is 'otsu':
         thresholdLevelOtsu = threshold_otsu(self.lowMagSlide[self.lowMagSlide < 100])  # Ignores all blank areas introduced by certain scanners
-        #elif threshold is 'triangle':
         thresholdLevelTriangle = threshold_triangle(self.lowMagSlide[self.lowMagSlide < 100])  # Ignores all blank areas introduced by certain scanners
-        #elif isinstance(threshold, int) or isinstance(threshold, float):
-        #    thresholdLevel = threshold
-        #else:
-        #    raise ValueError('No threshold specified for foreground segmentation')
 
         if type(threshold) in [int, float]:
             thresholdIsNumeric = True
@@ -438,7 +321,6 @@ class Slide:
 
             if localTmpTileMean <= thresholdLevelOtsu:
                 self.tileDictionary[tileAddress].update({'foregroundOtsu': True})
-                #self.otsuForegroundTileAddresses.append(tileAddress)
                 if threshold and threshold == 'otsu':
                     self.tileDictionary[tileAddress].update({'foreground': True})
                     self.foregroundTileAddresses.append(tileAddress)
@@ -449,7 +331,6 @@ class Slide:
 
             if localTmpTileMean <= thresholdLevelTriangle:
                 self.tileDictionary[tileAddress].update({'foregroundTriangle': True})
-                #self.triangleForegroundTileAddresses.append(tileAddress)
                 if threshold and threshold == 'triangle':
                     self.tileDictionary[tileAddress].update({'foreground': True})
                     self.foregroundTileAddresses.append(tileAddress)
@@ -527,7 +408,6 @@ class Slide:
                                                   ['y'], self.tileDictionary[tileAddress]['width'], self.tileDictionary[tileAddress]['height'])
 
                 tmpTile.write_to_file(os.path.join(folder, fileName))
-                # return np.ndarray(buffer=tmpTile.write_to_memory(), dtype=self.__format_to_dtype[tmpTile.format], shape=[tmpTile.height, tmpTile.width, tmpTile.bands])
             else:
                 raise ValueError(
                     'Tile address (' + str(tileAddress[0]) + ', ' + str(tileAddress[1]) + ') is out of bounds')
@@ -616,7 +496,6 @@ class Slide:
     def thumbnail(self, level):
         self.lowMagSlide = pv.Image.new_from_file(
             self.slideFilePath, level=level)
-        # smallerImage = self.slide.resize(0.002)
         self.lowMagSlide = np.ndarray(buffer=self.lowMagSlide.write_to_memory(),
                                       dtype=self.__format_to_dtype[self.lowMagSlide.format],
                                       shape=[self.lowMagSlide.height, self.lowMagSlide.width, self.lowMagSlide.bands])
@@ -652,10 +531,6 @@ class Slide:
 
         return hasattr(self, 'rawTissueDetectionMap')
 
-    #def hasInferredClassifications(self):
-    #    return hasattr(self, 'rawTissueDetectionMap')
-
-# TODO: a check tileaddress function
     def iterateTiles(self, tileDictionary=False, includeImage=False, writeToNumpy=False):
         """A generator function to iterate over all tiles in the tile dictionary,
         returning the tile address or the tile address and the tile image if
@@ -673,7 +548,6 @@ class Slide:
 
         tileDictionaryIterable = self.tileDictionary if not tileDictionary else tileDictionary
         for key, value in tileDictionaryIterable.items():
-            # if value['foreground']==True: Inplement exclude background
             if includeImage:
                 yield key, self.getTile(key,writeToNumpy=writeToNumpy)
             else:
@@ -702,9 +576,7 @@ class Slide:
                 raise PermissionError('foregroundOnly cannot be defined unless the threshold argument was used when detectForeground() was called. Note that the use of foregroundOnly is a legacy feature and not recommended.')
         else:
             return len(self.suitableTileAddresses(foregroundLevelThreshold=foregroundLevelThreshold, tissueLevelThreshold=tissueLevelThreshold))
-            #raise PermissionError('At least one of arguments foregroundLevelThreshold, tissueLevelThreshold, foregroundOnly must be defined.')
 
-    # ADAM EXPERIMENTAL
     def addAnnotations(self, annotationFilePath, classesToAdd=False, negativeClass=False, level=0,
         overwriteExistingAnnotations=False, mergeOverlappingAnnotationsOfSameClass=True, acceptMultiPolygonAnnotations=False):
         """A function that adds the overlap between all (desired) classes present in an annotation file and each tile in the tile dictionary
@@ -729,10 +601,6 @@ class Slide:
             pathml_slide.addAnnotations("/path/to/annotations.xml", negativeClass="negative")
         """
 
-        #if fileType != ['asap', 'Asap', 'ASAP', 'qupath', 'Qupath', 'QuPath', 'QUPATH']:
-        #    raise ValueError('fileType must be ASAP or QuPath')
-        #if fileType in ['qupath', 'Qupath', 'QuPath', 'QUPATH']: # REMOVE ONCE FIXED
-        #    raise ValueError('QuPath annotation files not currently supported')
         if not self.hasTileDictionary():
             raise PermissionError(
                 'setTileProperties must be called before adding annotations')
@@ -788,10 +656,7 @@ class Slide:
             print('xml file valid - ' + str(len(allAnnotations)) + ' annotation(s) found.') # Display number of found annotations
 
             # Iterate over all annotations to collect annotations in the same class
-            #classPolys = {}
-            #negativePolys = []
             for annotation in allAnnotations:
-
                 annotationClass = annotation.attrib['PartOfGroup']
 
                 if (classesToAdd) and (annotationClass not in classesToAdd):
@@ -907,18 +772,11 @@ class Slide:
                     else:
                         classPolys[annotationClass].append(poly)
 
-
         # Make a Shapely MultiPolygon for each class
-        #classMultiPolys = {ancl:geometry.MultiPolygon(ply) for (ancl,ply) in classPolys.items()}
         if mergeOverlappingAnnotationsOfSameClass:
             classMultiPolys = {ancl:unary_union(ply_list) for (ancl,ply_list) in classPolys.items()}
         else:
             classMultiPolys = {ancl:geometry.MultiPolygon(ply) for (ancl,ply) in classPolys.items()}
-
-        # If desired, merge any polygons of the same class that overlap
-        #if mergeOverlappingAnnotationsOfSameClass:
-        #    for ancl, mply in classMultiPolys.items():
-        #        if mpl
 
         if (negativeClass) and (len(negativePolys) == 0):
             print('Warning: 0 '+negativeClass+' annotations found, but negativeClass assigned a value')
@@ -941,7 +799,6 @@ class Slide:
                 else:
                     continue
 
-
         # Iterate over all tiles in tile dictionary, marking the overlap of each class MultiPolygon with each tile
         for address in self.iterateTiles():
             x = self.tileDictionary[address]['x']
@@ -955,9 +812,6 @@ class Slide:
 
         self.annotationClassMultiPolygons = classMultiPolys
 
-
-    # SEGMENTATION
-    # ADAM EXPERIMENTAL
     def getAnnotationTileMask(self, tileAddress, maskClass, writeToNumpy=False, verbose=False, acceptTilesWithoutClass=False):
         """A function that returns the PIL Image of the binary mask of a
         tile-annotation class overlap. Note that the output values are 0 (white)
@@ -981,11 +835,9 @@ class Slide:
         if tileAddress not in self.tileDictionary:
             raise ValueError('tileAddress must be in tileDictionary')
         if not self.hasAnnotations():
-            #print("Warning: no annotations found in Slide. All ground truth tile masks in Slide will be be totally absent of "+classToThreshold+" pixels. Returning blank tile mask. Run addAnnotations() if there should be annotations in this Slide.")
             if acceptTilesWithoutClass:
                 if writeToNumpy:
                     return np.zeros((height, height))
-                    #return np.array(mask.transpose(Image.FLIP_TOP_BOTTOM))
                 else:
                     blank_mask = Image.new('1', (height, height), 0)
                     return blank_mask
@@ -996,14 +848,11 @@ class Slide:
                 if acceptTilesWithoutClass:
                     if writeToNumpy:
                         return np.zeros((height, height))
-                        #return np.array(mask.transpose(Image.FLIP_TOP_BOTTOM))
                     else:
                         blank_mask = Image.new('1', (height, height), 0)
                         return blank_mask
                 else:
                     raise ValueError(maskClass+' not in annotationClassMultiPolygons')
-
-        #print('PERFORMING ACTUAL COMPARISONS')
 
         slideHeight = int(self.slideProperties['height'])
         x = self.tileDictionary[tileAddress]['x']
@@ -1066,69 +915,12 @@ class Slide:
                         else:
                             pass
 
-
-            # Non-polygonal intersection (should never happen)
-            #elif intersection.geom_type == 'GeometryCollection':
-            #    intersecs = list(intersection)
-            #    if verbose: print("number of geometry elements comprising intersection: ", len(intersecs))
-            #    for intersec in intersecs:
-
             else:
                 raise Warning('Intersection type unknown: '+intersection.geom_type)
 
         if verbose: print("\n")
         return mask
 
-    #def numberOfSuitableTiles(self, className, tileAnnotationOverlapThreshold=0.5, foregroundLevelThreshold=False, tissueLevelThreshold=False):
-    #    if not self.hasTileDictionary():
-    #        raise PermissionError(
-    #            'setTileProperties must be called before counting suitable tiles')
-    #    if not self.hasAnnotations():
-    #        raise PermissionError(
-    #            'addAnnotations must be called before counting suitable tiles')
-    #    if className+'Overlap' not in self.tileDictionary[list(self.tileDictionary.keys())[0]]:
-    #        raise ValueError(className+' not found in tile dictionary')
-    #    print('MADE IT')
-    #    #print(list(self.tileDictionary.keys()))
-    #    kys = list(self.tileDictionary.keys())
-    #    #print(self.tileDictionary)
-    #    tileCounter = 0
-    #    for address in self.iterateTiles():
-    #        print('address', address)
-    #        #if self.tileDictionary[address][className+'Overlap'] >= tileAnnotationOverlapThreshold:
-    #        print(self.tileDictionary[address][className+'Overlap'])
-    #        if (tissueLevelThreshold) and (foregroundLevelThreshold):
-    #            if 'tissueLevel' not in self.tileDictionary[address]:
-    #                raise PermissionError('Deep tissue detection must be performed with detectTissue() before tissueLevelThreshold can be defined')
-    #            if 'foregroundLevel' not in self.tileDictionary[address]:
-    #                raise PermissionError('Foreground detection must be performed with detectForeground() before foregroundLevelThreshold can be defined')
-    #            if (self.tileDictionary[address]['tissueLevel'] >= tissueLevelThreshold) and (self.tileDictionary[address]['foregroundLevel'] <= foregroundLevelThreshold):
-    #                if self.tileDictionary[address][className+'Overlap'] >= tileAnnotationOverlapThreshold:
-    #                    tileCounter = tileCounter + 1
-#
-#            elif (tissueLevelThreshold) and (not foregroundLevelThreshold):
-#                if 'tissueLevel' not in self.tileDictionary[address]:
-#                    raise PermissionError('Deep tissue detection must be performed with detectTissue() before tissueLevelThreshold can be defined')
-#                if self.tileDictionary[address]['tissueLevel'] >= tissueLevelThreshold: # do not extract background and artifact tiles
-#                    if self.tileDictionary[address][className+'Overlap'] >= tileAnnotationOverlapThreshold:
-#                        tileCounter = tileCounter + 1
-#
-#            elif (foregroundLevelThreshold) and (not tissueLevelThreshold):
-#                if 'foregroundLevel' not in self.tileDictionary[address]:
-#                    raise PermissionError('Foreground detection must be performed with detectForeground() before foregroundLevelThreshold can be defined')
-#                if self.tileDictionary[address]['foregroundLevel'] <= foregroundLevelThreshold:
-#                    if self.tileDictionary[address][className+'Overlap'] >= tileAnnotationOverlapThreshold:
-#                        tileCounter = tileCounter + 1
-#
-#            else:
-#                    if self.tileDictionary[address][className+'Overlap'] >= tileAnnotationOverlapThreshold:
-#                        tileCounter = tileCounter + 1
-#
-#            return tileCounter
-
-
-
-    # ADAM EXPERIMENTAL
     def extractAnnotationTiles(self, outputDir, tileDirName=False, numTilesToExtractPerClass='all', classesToExtract=False, otherClassNames=False,
         extractSegmentationMasks=False, tileAnnotationOverlapThreshold=0.5, foregroundLevelThreshold=False, tissueLevelThreshold=False,
         returnTileStats=True, returnOnlyNumTilesFromThisClass=False, seed=False):
@@ -1225,39 +1017,6 @@ class Slide:
                 if self.tileDictionary[address][extractionClass+'Overlap'] >= annotationOverlapThresholdDict[extractionClass]:
                     annotatedTileAddresses[extractionClass].append(address)
 
-        #for address in self.iterateTiles():
-        #    #print('address', address)
-        #    if (tissueLevelThreshold) and (foregroundLevelThreshold):
-        #        if 'tissueLevel' not in self.tileDictionary[address]:
-        #            raise PermissionError('Deep tissue detection must be performed with detectTissue() before tissueLevelThreshold can be defined')
-        #        if 'foregroundLevel' not in self.tileDictionary[address]:
-        #            raise PermissionError('Foreground detection must be performed with detectForeground() before foregroundLevelThreshold can be defined')
-        #        if (self.tileDictionary[address]['tissueLevel'] >= tissueLevelThreshold) and (self.tileDictionary[address]['foregroundLevel'] <= foregroundLevelThreshold):
-        #            for extractionClass in extractionClasses:
-        #                if self.tileDictionary[address][extractionClass+'Overlap'] >= annotationOverlapThresholdDict[extractionClass]:
-        #                    annotatedTileAddresses[extractionClass].append(address)
-#
-#            elif (tissueLevelThreshold) and (not foregroundLevelThreshold):
-#                if 'tissueLevel' not in self.tileDictionary[address]:
-#                    raise PermissionError('Deep tissue detection must be performed with detectTissue() before tissueLevelThreshold can be defined')
-#                if self.tileDictionary[address]['tissueLevel'] >= tissueLevelThreshold: # do not extract background and artifact tiles
-#                    for extractionClass in extractionClasses:
-#                        if self.tileDictionary[address][extractionClass+'Overlap'] >= annotationOverlapThresholdDict[extractionClass]:
-#                            annotatedTileAddresses[extractionClass].append(address)
-#
-#            elif (foregroundLevelThreshold) and (not tissueLevelThreshold):
-#                if 'foregroundLevel' not in self.tileDictionary[address]:
-#                    raise PermissionError('Foreground detection must be performed with detectForeground() before foregroundLevelThreshold can be defined')
-#                if self.tileDictionary[address]['foregroundLevel'] <= foregroundLevelThreshold:
-#                    for extractionClass in extractionClasses:
-#                        if self.tileDictionary[address][extractionClass+'Overlap'] >= annotationOverlapThresholdDict[extractionClass]:
-#                            annotatedTileAddresses[extractionClass].append(address)
-#
-#            else:
-#                for extractionClass in extractionClasses:
-#                    if self.tileDictionary[address][extractionClass+'Overlap'] >= annotationOverlapThresholdDict[extractionClass]:
-#                        annotatedTileAddresses[extractionClass].append(address)
-
         annotatedTilesToExtract = {} #{extractionClass: [] for extractionClass in extractionClasses}
         if type(numTilesToExtractPerClass) == int:
             if numTilesToExtractPerClass <= 0:
@@ -1270,7 +1029,7 @@ class Slide:
                     annotatedTilesToExtract[extractionClass] = annotatedTileAddresses[extractionClass]
                 else:
                     annotatedTilesToExtract[extractionClass] = random.sample(annotatedTileAddresses[extractionClass], numTilesToExtractPerClass)
-            #annotatedTilesToExtract = {extractionClass: random.sample(annotatedTileAddresses[extractionClass], numTilesToExtractPerClass) for extractionClass in extractionClasses}
+
         elif numTilesToExtractPerClass == 'all':
             for extractionClass in extractionClasses:
                 if len(annotatedTileAddresses[extractionClass]) == 0:
@@ -1423,22 +1182,7 @@ class Slide:
                         'num_tiles': tileCounter}
         else:
             return True
-            #channel_means_across_tiles = np.array(channel_means_across_tiles)
-            #channel_stds_across_tiles = np.array(channel_stds_across_tiles)
-            #return {'channel_means': np.mean(channel_means_across_tiles, axis=0),
-            #        'channel_stds': np.mean(channel_stds_across_tiles, axis=0),
-            #        'num_tiles': tileCounter}
 
-
-
-            # support per class number of tiles to extract
-            # raise warning if fewer than number found in a slide's class
-            # raise warning if no slides found in a slide's class
-            # print how many of each tile are being extracted for each class
-            # numTilesToExtractPerClass (allow dictionary?), can be 'all'
-            # automatically detect whether it is an asap xml or qupath geojson (and if not throw error)
-
-    # ADAM EXPERIMENTAL
     def extractRandomUnannotatedTiles(self, outputDir, tileDirName=False, numTilesToExtract=100, unannotatedClassName='unannotated', otherClassNames=False,
         extractSegmentationMasks=False, foregroundLevelThreshold=False, tissueLevelThreshold=False, returnTileStats=True, seed=False):
         """A function to extract randomly selected tiles that don't overlap any
@@ -1505,56 +1249,6 @@ class Slide:
             if not overlapsAnnotation:
                 unannotatedTileAddresses.append(address)
 
-        #for address in self.iterateTiles():
-#
-#            if tissueLevelThreshold and foregroundLevelThreshold:
-#                if 'tissueLevel' not in self.tileDictionary[address]:
-#                    raise PermissionError('Deep tissue detection must be performed with detectTissue() before tissueLevelThreshold can be defined')
-#                if 'foregroundLevel' not in self.tileDictionary[address]:
-#                    raise PermissionError('Foreground detection must be performed with detectForeground() before tissueLevelThreshold can be defined')
-#                #if foregroundLevelThreshold:
-#                if (self.tileDictionary[address]['tissueLevel'] >= tissueLevelThreshold) and (self.tileDictionary[address]['foregroundLevel'] <= foregroundLevelThreshold):
-#                    overlapsAnnotation = False
-#                    for annotationClass in annotationClasses:
-#                        if self.tileDictionary[address][annotationClass] > 0:
-#                            overlapsAnnotation = True
-#                            break
-#                    if not overlapsAnnotation:
-#                        unannotatedTileAddresses.append(address)
-#
-#            elif (tissueLevelThreshold) and (not foregroundLevelThreshold):
-#                if 'tissueLevel' not in self.tileDictionary[address]:
-#                    raise PermissionError('Deep tissue detection must be performed with detectTissue() before tissueLevelThreshold can be defined')
-#                if self.tileDictionary[address]['tissueLevel'] >= tissueLevelThreshold: # do not extract background and artifact tiles
-#                    overlapsAnnotation = False
-#                    for annotationClass in annotationClasses:
-#                        if self.tileDictionary[address][annotationClass] > 0:
-#                            overlapsAnnotation = True
-#                            break
-#                    if not overlapsAnnotation:
-#                        unannotatedTileAddresses.append(address)
-#
-#            elif (foregroundLevelThreshold) and (not tissueLevelThreshold):
-#                if 'foregroundLevel' not in self.tileDictionary[address]:
-#                    raise PermissionError('Foreground detection must be performed with detectForeground() before foregroundLevelThreshold can be defined')
-#                if self.tileDictionary[address]['foregroundLevel'] <= foregroundLevelThreshold:
-#                    overlapsAnnotation = False
-#                    for annotationClass in annotationClasses:
-#                        if self.tileDictionary[address][annotationClass] > 0:
-#                            overlapsAnnotation = True
-#                            break
-#                    if not overlapsAnnotation:
-#                        unannotatedTileAddresses.append(address)
-#
-#            else:
-#                overlapsAnnotation = False
-#                for annotationClass in annotationClasses:
-#                    if self.tileDictionary[address][annotationClass] > 0:
-#                        overlapsAnnotation = True
-#                        break
-#                if not overlapsAnnotation:
-#                    unannotatedTileAddresses.append(address)
-
         if len(unannotatedTileAddresses) == 0:
             print('Warning: 0 unannotated tiles found; making no tile directories and returning zeroes')
         if len(unannotatedTileAddresses) < numTilesToExtract:
@@ -1562,7 +1256,6 @@ class Slide:
             unannotatedTilesToExtract = unannotatedTileAddresses
         else:
             unannotatedTilesToExtract = random.sample(unannotatedTileAddresses, numTilesToExtract)
-            #print(str(len(unannotatedTileAddresses))+' unannotated tiles found in total')
 
         # Create empty class tile directories
         if len(unannotatedTileAddresses) > 0:
@@ -1623,7 +1316,6 @@ class Slide:
 
         #print("Tiles to extract:", unannotatedTilesToExtract)
         for tl in unannotatedTilesToExtract:
-            #print("On tile:", tl)
             area = self.getTile(tl)
             if (tissueLevelThreshold) and (foregroundLevelThreshold):
                 area.write_to_file(os.path.join(outputDir, 'tiles', id, unannotatedClassName,
@@ -1641,28 +1333,13 @@ class Slide:
             tileCounter = tileCounter + 1
             if returnTileStats:
                 nparea = self.getTile(tl, writeToNumpy=True)[...,:3] # remove transparency channel
-                #print(nparea[...,0])
-                #print(nparea[...,1])
-                #print(nparea[...,2])
-                #print(nparea[...,3])
                 nparea = normalize_to_1max(nparea).numpy() # normalize values from 0-255 to 0-1
                 local_channel_sums = np.sum(nparea, axis=(1,2))
                 local_channel_squared_sums = np.sum(np.square(nparea), axis=(1,2))
 
                 channel_sums = np.add(channel_sums, local_channel_sums)
                 channel_squared_sums = np.add(channel_squared_sums, local_channel_squared_sums)
-                #print(channel_sums)
-                #print("---")
-                #print(channel_squared_sums)
-                #channel
-                #print(nparea.shape)
-                #channel_means = np.mean(nparea, axis=(1,2))
-                #channel_stds = np.std(nparea, axis=(1,2))
-                #print(channel_means)
-                #print(channel_stds)
-                #quit()
-                #channel_means_across_tiles.append(channel_means)
-                #channel_stds_across_tiles.append(channel_stds)
+
             if extractSegmentationMasks:
                 height = self.tileDictionary[tl]['height']
                 mask = Image.new('1', (height, height), 0) # blank mask
@@ -1680,11 +1357,7 @@ class Slide:
                     mask.save(os.path.join(outputDir, 'masks', id, unannotatedClassName,
                         id+'_'+unannotatedClassName+'_'+str(self.tileDictionary[tl]['x'])+'x_'+str(self.tileDictionary[tl]['y'])+'y'+'_'+str(self.tileDictionary[tl]['height'])+'tilesize_mask.jpg'))
 
-
-
         if returnTileStats:
-            #channel_means_across_tiles = np.array(channel_means_across_tiles)
-            #channel_stds_across_tiles = np.array(channel_stds_across_tiles)
             if tileDirName:
                 return {'slide': tileDirName,
                         'channel_sums': channel_sums,#np.mean(channel_means_across_tiles, axis=0).tolist(),
@@ -1698,9 +1371,6 @@ class Slide:
         else:
             return True
 
-
-
-    # ADAM EXPERIMENTAL
     def detectTissue(self, tissueDetectionLevel=1, tissueDetectionTileSize=512, tissueDetectionTileOverlap=0, tissueDetectionUpsampleFactor=4, batchSize=20, overwriteExistingTissueDetection=False, modelStateDictPath='../pathml/pathml/models/deep-tissue-detector_densenet_state-dict.pt', architecture='densenet'):
         """A function to apply PathML's built-in deep tissue detector to assign
         artifact, background, and tissue probabilities that sum to one to each tile
@@ -1784,8 +1454,6 @@ class Slide:
             self.tileDictionary[address].update({'backgroundLevel': predictionMap1res[address[1], address[0]][1]})
             self.tileDictionary[address].update({'tissueLevel': predictionMap1res[address[1], address[0]][2]})
 
-
-    # ADAM EXPERIMENTAL
     def visualizeTissueDetection(self, fileName=False, folder=os.getcwd()):
         """A function to generate a 3-color tissue detection map showing where
         on a WSI the deep tissue detector applied with detectTissue() artifact
@@ -1815,21 +1483,15 @@ class Slide:
             id = self.slideFileName
 
         map = resize(self.rawTissueDetectionMap, np.zeros([self.numTilesInY, self.numTilesInX]).shape, order=0, anti_aliasing=False)
-        #plt.imsave(os.path.join(folder, id+'.png'), map)
 
         plt.figure()
-        #plt.imshow(resize(ourNewImg, classMask.shape))
         plt.imshow(map, cmap=mpl.colors.ListedColormap(['blue', 'yellow', 'red']))
-        #plt.imshow(foregroundMask, cmap='plasma', alpha=0.3, vmin=0, vmax=1.0)
-        #plt.colorbar()
         plt.title(id+"\n"+'deep tissue detection')
         if folder:
-            #os.makedirs(os.path.join(folder, self.slideFileName), exist_okay=True)
             plt.savefig(os.path.join(folder, id+"_tissuedetection.png"))
         else:
             plt.show(block=False)
 
-    # ADAM EXPERIMENTAL
     def inferClassifier(self, trainedModel, classNames, dataTransforms=None, batchSize=30, numWorkers=16, foregroundLevelThreshold=False, tissueLevelThreshold=False, overwriteExistingClassifications=False):
         """A function to infer a trained classifier on a Slide object using
         PyTorch.
@@ -1898,7 +1560,6 @@ class Slide:
             batch_prediction = torch.nn.functional.softmax(
                 output, dim=1).cpu().data.numpy()
 
-            # Reshape it is a Todo - instead of for looping
             for index in range(len(inputTile)):
                 tileAddress = (inputs['tileAddress'][0][index].item(),
                                inputs['tileAddress'][1][index].item())
@@ -1914,10 +1575,6 @@ class Slide:
             self.classifierPredictionTileAddresses = classifierPredictionTileAddresses
         else:
             raise Warning('No suitable tiles found at current tissueLevelThreshold and foregroundLevelThreshold')
-
-
-
-##########################################################
 
     def inferSegmenter(self, trainedModel, classNames, dataTransforms=None, dtype='float', batchSize=1, numWorkers=16, foregroundLevelThreshold=False, tissueLevelThreshold=False, overwriteExistingSegmentations=False):#, saveInChunksAtFolder=False):
         """A function to infer a trained segmentation model on a Slide object using
@@ -1979,7 +1636,6 @@ class Slide:
         segmenterPredictionTileAddresses = []
         counter = 0
         for inputs in tqdm(pathSlideDataloader):
-
             inputTile = inputs['image'].to(device)
 
             # input into net
@@ -2002,18 +1658,11 @@ class Slide:
                 tf = transforms.Compose([
                     transforms.ToPILImage(),
                     transforms.Resize(pathSlideDataset.tileSize),
-                    #transforms.Resize(full_img.size[1]),
                     transforms.ToTensor() # converts from HWC to CWH and divides by 255
                 ])
 
                 tile_probs = tf(tile_probs.cpu())
                 full_mask = tile_probs.squeeze().cpu().numpy()
-                #full_mask = np.float16(full_mask)
-
-                #print("Output mask data type:", full_mask.dtype)
-
-                #print("full mask shape:", full_mask.shape)
-                #print("full mask shape length:", len(full_mask.shape))
 
                 if (len(full_mask.shape) == 2 and len(classNames) == 1):
                     pass
@@ -2040,27 +1689,13 @@ class Slide:
                         else:
                             raise ValueError("'dtype' must be 'float' or 'int'")
 
-                #if saveInChunksAtFolder:
-                #    if not 'segmenterInferencePrediction' in self.tileDictionary[tileAddress]:
-                #        self.appendTag(tileAddress, 'segmenterInferencePrediction', segmentation_masks)
-                #else:
                 self.appendTag(tileAddress, 'segmenterInferencePrediction', segmentation_masks)
                 segmenterPredictionTileAddresses.append(tileAddress)
-
-                #counter = counter + 1
-                #if saveInChunksAtFolder:
-                #    if len(counter) > 1000
-                #    self.save(folder=saveInChunksAtFolder)
-                #    counter = 0
 
         if len(segmenterPredictionTileAddresses) > 0:
             self.segmenterPredictionTileAddresses = segmenterPredictionTileAddresses
         else:
             raise Warning('No suitable tiles found at current tissueLevelThreshold and foregroundLevelThreshold')
-
-####################################################
-
-
 
     def getTileDiceScore(self, tileAddress, className, pixelBinarizationThreshold=0.5):
         """A function that returns the Dice coefficient by comparing the tile's
@@ -2079,14 +1714,10 @@ class Slide:
         if not self.hasTileDictionary():
             raise PermissionError(
                 'setTileProperties must be called before getting a tile Dice score.')
-        #if not self.hasAnnotations():
-        #    print("Warning: no annotations found in Slide. All ground truth tile masks in Slide will be be totally absent of "+classToThreshold+" pixels. Run addAnnotations() if there should be annotations in this Slide.")
         if 'segmenterInferencePrediction' not in self.tileDictionary[tileAddress]:
             raise PermissionError('No segmentation prediction currently exists at the specified tile address. Please run inferSegmenter() and make sure that the specified tile is within the suitable tile set requested with tissueLevelThreshold and foregroundLevelThreshold.')
         if className not in self.tileDictionary[tileAddress]['segmenterInferencePrediction']:
             raise PermissionError(className+' is not a class present in segmenterInferencePrediction.')
-        #if className not in self.annotationClassMultiPolygons:
-        #    raise PermissionError(className+' is not a class present in annotations.')
 
         binarized_prediction_mask = (torch.from_numpy(self.tileDictionary[tileAddress]['segmenterInferencePrediction'][className]) > pixelBinarizationThreshold).float()
         # we set acceptTilesWithoutClass to True so that we will get blank masks for negative slides
@@ -2094,11 +1725,8 @@ class Slide:
         if np.max(ground_truth_mask) > 1:
             ground_truth_mask = ground_truth_mask / 255
         ground_truth_mask = torch.div(ground_truth_mask, 255) # getAnnotationTileMask outputs 0-255 arrays, so we need to normalize to be 0-1 range
-        #print("mean of ground truth mask:", torch.mean(ground_truth_mask))
+
         return dice_coeff(binarized_prediction_mask, ground_truth_mask).item()
-
-
-
 
     def suitableTileAddresses(self, tissueLevelThreshold=False, foregroundLevelThreshold=False):
         """A function that returns a list of the tile address tuples that meet
@@ -2172,7 +1800,6 @@ class Slide:
         ourNewImg = self.thumbnail(level=level)
         classMask = np.zeros((self.numTilesInX, self.numTilesInY)[::-1])
 
-        #if not hasattr(self, 'segmenterPredictionTileAddresses'):
         foundPrediction = False
         for tileAddress, tileEntry in self.tileDictionary.items():
             if 'classifierInferencePrediction' in tileEntry:
@@ -2197,8 +1824,6 @@ class Slide:
         else:
             plt.show(block=False)
 
-
-
     def visualizeSegmenterInference(self, classToVisualize, probabilityThreshold=None, folder=False, level=4):
         """A function to create an inference map image of a Slide after running
         inferSegmenter() on it. Tiles are shown with the averageof the probabilities
@@ -2219,7 +1844,6 @@ class Slide:
         ourNewImg = self.thumbnail(level=level)
         classMask = np.zeros((self.numTilesInX, self.numTilesInY)[::-1])
 
-        #if not hasattr(self, 'segmenterPredictionTileAddresses'):
         foundPrediction = False
         for tileAddress, tileEntry in self.tileDictionary.items():
             if 'segmenterInferencePrediction' in tileEntry:
@@ -2244,9 +1868,6 @@ class Slide:
         else:
             plt.show(block=False)
 
-
-
-
     def visualizeThumbnail(self, folder=False, level=4):
         """A function to create a low-resolution image of the WSI stored in a
         Slide.
@@ -2260,10 +1881,8 @@ class Slide:
         """
 
         ourNewImg = self.thumbnail(level=level)
-        #classMask = np.zeros((self.numTilesInX, self.numTilesInY)[::-1])
 
         plt.figure()
-        #plt.imshow(resize(ourNewImg, classMask.shape))
         plt.imshow(ourNewImg)
         plt.title(self.slideFileName)
         if folder:
@@ -2303,22 +1922,13 @@ class Slide:
                     foregroundMask[tileAddress[1],tileAddress[0]] = True
                 else:
                     foregroundMask[tileAddress[1],tileAddress[0]] = False
-            #foregroundMask[tileAddress[1],tileAddress[0]] = tileEntry['foreground']
 
         plt.figure()
-        #plt.imshow(resize(ourNewImg, classMask.shape))
         plt.imshow(foregroundMask, cmap=mpl.colors.ListedColormap(colors))
-        #plt.imshow(foregroundMask, cmap='plasma', alpha=0.3, vmin=0, vmax=1.0)
-        #plt.colorbar()
         plt.title(self.slideFileName+"\n"+str(foregroundLevelThreshold)+" thresholded")
-        #else:
-        #    plt.title(self.slideFileName+"\n"+'Foreground')
         if folder:
             os.makedirs(os.path.join(folder, id), exist_okay=True)
-            #if method:
             plt.savefig(os.path.join(folder, id, id+str(foregroundLevelThreshold)+"_thresholded_foregrounddetection.png"))
-            #else:
-            #    plt.savefig(os.path.join(folder, id, id+"_foregrounddetection.png"))
         else:
             plt.show(block=False)
 
@@ -2399,10 +2009,6 @@ class Slide:
 
         if not self.hasAnnotations():
             print("Warning: no annotations found in Slide. All tiles in Slide will be assumed to be negative for "+classToThreshold+". Run addAnnotations() if there should be annotations in this Slide.")
-        #elif classToThreshold+'Overlap' not in self.tileDictionary[self.classifierPredictionTileAddresses[0]]:
-        #    print("Warning: no annotations found in Slide. All tiles in Slide will be assumed to be negative for "+classToThreshold+". Run addAnnotations() if there should be annotations in this Slide.")
-            #raise PermissionError(
-            #    'addAnnotations must be called before extracting tiles')
 
         if type(probabilityThresholds) in [float, int]:
             pT = [probabilityThresholds]
@@ -2453,8 +2059,6 @@ class Slide:
         else:
             return metrics[0]
 
-########################################################################################
-
     def segmenterMetricAtThreshold(self, classToThreshold, probabilityThresholds, metric="dice_coeff"):
         """A function to return the pixel-level metric of a class probability
         threshold (or list of thresholds) compared to the ground truth, where a
@@ -2503,13 +2107,8 @@ class Slide:
         if metric == 'dice_coeff':
             for predictionTileAddress in self.segmenterPredictionTileAddresses:
                 ground_truth_masks_np.append(self.getAnnotationTileMask(predictionTileAddress, classToThreshold, writeToNumpy=True, acceptTilesWithoutClass=True))
-                #ground_truth_mask = torch.from_numpy(self.getAnnotationTileMask(predictionTileAddress, classToThreshold, writeToNumpy=True, acceptTilesWithoutClass=True)).float()
-                #ground_truth_mask = torch.div(ground_truth_mask, 255) # getAnnotationTileMask outputs 0-255 arrays, so we need to normalize to be 0-1 range
-                #ground_truth_masks.append(ground_truth_mask)
-            print("finished making ground truth masks")
 
             for probabilityThreshold in pT:
-                #binarized_prediction_masks = []
                 dice_scores_at_threshold = []
                 for i, predictionTileAddress in enumerate(self.segmenterPredictionTileAddresses):
                     inf_tile = self.tileDictionary[predictionTileAddress]['segmenterInferencePrediction'][classToThreshold]
@@ -2521,28 +2120,7 @@ class Slide:
 
                 print("Mean Dice score at threshold "+str(probabilityThreshold)+":", np.mean(dice_scores_at_threshold))
                 metrics.append(np.mean(dice_scores_at_threshold))
-
-
-
-                #mean_dice_at_threshold = dice_coeff(torch.stack(binarized_prediction_masks), torch.stack(ground_truth_masks)).item()
-                #print("Mean Dice score at threshold "+str(probabilityThreshold)+":", mean_dice_at_threshold)
-                #metrics.append(mean_dice_at_threshold)
-
-
-
-
-
-
-
-
-            #for probabilityThreshold in pT:
-            #    tds = []
-            #    for predictionTileAddress in self.segmenterPredictionTileAddresses:
-                    #print(predictionTileAddress)
-            #        tds.append(self.getTileDiceScore(predictionTileAddress, classToThreshold, pixelBinarizationThreshold=probabilityThreshold))
-                    #print("Dice score:", tds)
-            #    metrics.append(np.mean(tds))
-            #    print("Average Dice score thresholding at "+str(probabilityThreshold)+":", np.mean(tds))
+                
         else:
             raise ValueError("metric must be one of: 'dice_coeff'")
 
