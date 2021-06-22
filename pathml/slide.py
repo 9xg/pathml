@@ -1547,6 +1547,7 @@ class Slide:
             foregroundLevelThreshold=foregroundLevelThreshold, transform=dataTransforms)
 
         if 'classifierInferencePrediction' in self.tileDictionary[pathSlideDataset.suitableTileAddresses[0]]:
+            #print("classifications already present:", self.tileDictionary[pathSlideDataset.suitableTileAddresses[0]])
             if not overwriteExistingClassifications:
                 raise PermissionError('Classification predictions are already present in the tile dictionary. Set overwriteExistingClassifications to True to overwrite them.')
 
