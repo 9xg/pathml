@@ -6,7 +6,6 @@ from torchvision import transforms
 import numpy as np
 import pyvips as pv
 import pandas as pd
-import geopandas
 from PIL import Image, ImageDraw
 from joblib import Parallel, delayed
 from sklearn.metrics import accuracy_score, balanced_accuracy_score, f1_score, precision_score, recall_score
