@@ -1487,7 +1487,7 @@ class Slide:
         plt.title(id+"\n"+'deep tissue detection')
         if folder:
             os.makedirs(os.path.join(folder, id), exist_ok=True)
-            plt.savefig(os.path.join(folder, id+"_tissuedetection.png"))
+            plt.savefig(os.path.join(folder, id, id+"_tissuedetection.png"))
         else:
             plt.show(block=False)
 
@@ -1546,7 +1546,6 @@ class Slide:
             foregroundLevelThreshold=foregroundLevelThreshold, transform=dataTransforms)
 
         if 'classifierInferencePrediction' in self.tileDictionary[pathSlideDataset.suitableTileAddresses[0]]:
-            #print("classifications already present:", self.tileDictionary[pathSlideDataset.suitableTileAddresses[0]])
             if not overwriteExistingClassifications:
                 raise PermissionError('Classification predictions are already present in the tile dictionary. Set overwriteExistingClassifications to True to overwrite them.')
 
@@ -1576,7 +1575,7 @@ class Slide:
         else:
             raise Warning('No suitable tiles found at current tissueLevelThreshold and foregroundLevelThreshold')
 
-    def inferSegmenter(self, trainedModel, classNames, dataTransforms=None, dtype='float', batchSize=1, numWorkers=16, foregroundLevelThreshold=False, tissueLevelThreshold=False, overwriteExistingSegmentations=False):#, saveInChunksAtFolder=False):
+    def inferSegmenter(self, trainedModel, classNames, dataTransforms=None, dtype='int', batchSize=1, numWorkers=16, foregroundLevelThreshold=False, tissueLevelThreshold=False, overwriteExistingSegmentations=False):#, saveInChunksAtFolder=False):
         """A function to infer a trained segmentation model on a Slide object using
         PyTorch.
 
@@ -1584,7 +1583,7 @@ class Slide:
             trainedModel (torchvision.models): A PyTorch segmentation model that has been trained for the segmentation task desired for inference.
             classNames (list of strings): a list of class names. The first class name is expected to correspond with the first channel of the output mask image, the second with the second, and so on.
             dataTransforms (torchvision.transforms.Compose): a PyTorch torchvision.Compose object with the desired data transformations.
-            dtype (string, optional): if 'float', saves the pixel probabilities as 0-1 numpy.float32 values; if 'int', saves the pixel probabilities as 0-255 numpy.uint8 values (these make for much more memory efficient Slide objects). Default is 'float'.
+            dtype (string, optional): if 'float', saves the pixel probabilities as 0-1 numpy.float32 values; if 'int', saves the pixel probabilities as 0-255 numpy.uint8 values (these make for much more memory efficient Slide objects). Default is 'int'.
             batchSize (int, optional): the number of tiles to use in each inference minibatch.
             numWorkers (int, optional): the number of workers to use when inferring the model on the WSI
             foregroundLevelThreshold (string or int or float, optional): if defined as an int, only infers trainedModel on tiles with a 0-100 foregroundLevel value less or equal to than the set value (0 is a black tile, 100 is a white tile). Only infers on Otsu's method-passing tiles if set to 'otsu', or triangle algorithm-passing tiles if set to 'triangle'. Default is not to filter on foreground at all.
@@ -1758,15 +1757,16 @@ class Slide:
         suitableTileAddresses = []
         for tA in self.iterateTiles():
             if tissueLevelThreshold and foregroundLevelThreshold:
-                if foregroundLevelThreshold == 'otsu':
-                    if (self.tileDictionary[tA]['tissueLevel'] >= tissueLevelThreshold) and self.tileDictionary[tA]['foregroundOtsu']:
-                        suitableTileAddresses.append(tA)
-                elif foregroundLevelThreshold == 'triangle':
-                    if (self.tileDictionary[tA]['tissueLevel'] >= tissueLevelThreshold) and self.tileDictionary[tA]['foregroundTriangle']:
-                        suitableTileAddresses.append(tA)
-                else:
-                    if (self.tileDictionary[tA]['tissueLevel'] >= tissueLevelThreshold) and (self.tileDictionary[tA]['foregroundLevel'] <= foregroundLevelThreshold):
-                        suitableTileAddresses.append(tA)
+                if self.tileDictionary[tA]['tissueLevel'] >= tissueLevelThreshold:
+                    if foregroundLevelThreshold == 'otsu':
+                        if self.tileDictionary[tA]['foregroundOtsu']:
+                            suitableTileAddresses.append(tA)
+                    elif foregroundLevelThreshold == 'triangle':
+                        if self.tileDictionary[tA]['foregroundTriangle']:
+                            suitableTileAddresses.append(tA)
+                    else:
+                        if self.tileDictionary[tA]['foregroundLevel'] <= foregroundLevelThreshold:
+                            suitableTileAddresses.append(tA)
             elif tissueLevelThreshold and not foregroundLevelThreshold:
                 if (self.tileDictionary[tA]['tissueLevel'] >= tissueLevelThreshold):
                     suitableTileAddresses.append(tA)
@@ -1878,6 +1878,10 @@ class Slide:
                 classMask[tileAddress[1],tileAddress[0]] = 0
         if not foundPrediction:
             raise ValueError('No predictions found in slide. Use inferSegmenter() to generate them.')
+
+        # re-scale to 0-1 if dtype was set to int when calling Slide.inferClassifier()
+        if np.max(classMask) > 1:
+            classMask = classMask / 255
 
         plt.figure()
         plt.imshow(resize(ourNewImg, classMask.shape))
